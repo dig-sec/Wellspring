@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+
+from ..schemas import Chunk, ExtractionRun
+
+
+class RunStore(ABC):
+    @abstractmethod
+    def create_run(
+        self,
+        run: ExtractionRun,
+        source_uri: str,
+        text: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_run_status(self, run_id: str, status: str, error: Optional[str] = None) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_run(self, run_id: str) -> Optional[ExtractionRun]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def recover_stale_runs(self) -> int:
+        """Reset any 'running' runs back to 'pending' (e.g. after a crash)."""
+        ...
+
+    def claim_next_run(self) -> Optional[ExtractionRun]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_document(self, run_id: str) -> Optional[Dict[str, Any]]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def store_chunks(self, run_id: str, chunks: List[Chunk]) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_chunks(self, run_id: str) -> List[Chunk]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_recent_runs(self, limit: int = 50) -> List[ExtractionRun]:
+        raise NotImplementedError

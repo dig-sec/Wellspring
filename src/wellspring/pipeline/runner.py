@@ -1,0 +1,211 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime
+from typing import Optional
+from uuid import uuid4
+
+from ..chunking import chunk_text
+from ..config import Settings
+from ..dedupe import EntityResolver
+from ..llm import OllamaClient, extract_triples
+from ..llm.prompts import render_prompt
+from ..normalize import normalize_predicate
+from ..schemas import Entity, Provenance, Relation
+from ..storage.base import GraphStore
+from ..storage.run_store import RunStore
+
+logger = logging.getLogger(__name__)
+
+
+def _snippet(text: str, limit: int = 400) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _infer_is_a_relations(relations: list[Relation]) -> list[Relation]:
+    is_a = [r for r in relations if r.predicate == "is_a"]
+    if len(is_a) < 2:
+        return []
+    outgoing: dict[str, list[Relation]] = {}
+    for relation in is_a:
+        outgoing.setdefault(relation.subject_id, []).append(relation)
+
+    existing = {(r.subject_id, r.predicate, r.object_id) for r in relations}
+    inferred: list[Relation] = []
+    seen: set[tuple[str, str, str]] = set()
+    for first in is_a:
+        for second in outgoing.get(first.object_id, []):
+            if first.subject_id == second.object_id:
+                continue
+            triple_key = (first.subject_id, "is_a", second.object_id)
+            if triple_key in existing or triple_key in seen:
+                continue
+            confidence = min(first.confidence, second.confidence) * 0.9
+            inferred.append(
+                Relation(
+                    id=str(uuid4()),
+                    subject_id=first.subject_id,
+                    predicate="is_a",
+                    object_id=second.object_id,
+                    confidence=confidence,
+                    attrs={"origin": "inferred", "rule": "is_a_transitive"},
+                )
+            )
+            seen.add(triple_key)
+    return inferred
+
+
+def _build_cooccurrence_relations(
+    entities: list[Entity],
+    max_entities: int,
+) -> list[Relation]:
+    if max_entities <= 1:
+        return []
+    unique = {entity.id: entity for entity in entities}
+    if len(unique) < 2:
+        return []
+    ordered = sorted(unique.values(), key=lambda e: e.id)
+    if len(ordered) > max_entities:
+        ordered = ordered[:max_entities]
+    relations: list[Relation] = []
+    for i in range(len(ordered)):
+        for j in range(i + 1, len(ordered)):
+            subject = ordered[i]
+            obj = ordered[j]
+            relations.append(
+                Relation(
+                    id=str(uuid4()),
+                    subject_id=subject.id,
+                    predicate="co_occurs_with",
+                    object_id=obj.id,
+                    confidence=0.1,
+                    attrs={
+                        "origin": "cooccurrence",
+                        "co_occurrence_count": 1,
+                    },
+                )
+            )
+    return relations
+
+
+async def process_run(
+    run_id: str,
+    graph_store: GraphStore,
+    run_store: RunStore,
+    settings: Settings,
+    client: Optional[OllamaClient] = None,
+) -> None:
+    doc = run_store.get_document(run_id)
+    if not doc:
+        raise RuntimeError(f"No document for run {run_id}")
+
+    source_uri = doc["source_uri"]
+    text = doc["text"]
+
+    chunks = chunk_text(
+        text,
+        source_uri=source_uri,
+        max_chars=settings.chunk_size,
+        overlap=settings.chunk_overlap,
+    )
+    run_store.store_chunks(run_id, chunks)
+
+    resolver = EntityResolver(graph_store)
+
+    owned_client = False
+    if client is None:
+        client = OllamaClient(settings.ollama_base_url, settings.ollama_model)
+        owned_client = True
+
+    try:
+        for chunk in chunks:
+            prompt = render_prompt("extract_triples.jinja2", chunk_text=chunk.text)
+            raw = await client.generate(prompt)
+            triples = extract_triples(raw)
+            chunk_entities: list[Entity] = []
+            extracted_relations: list[Relation] = []
+            for triple in triples:
+                predicate = normalize_predicate(triple.predicate)
+                if not predicate:
+                    continue
+                subject = resolver.resolve(triple.subject)
+                obj = resolver.resolve(triple.object)
+                chunk_entities.extend([subject, obj])
+                relation = Relation(
+                    id=str(uuid4()),
+                    subject_id=subject.id,
+                    predicate=predicate,
+                    object_id=obj.id,
+                    confidence=triple.confidence,
+                    attrs={"origin": "extracted"},
+                )
+                extracted_relations.append(relation)
+                stored_relations = graph_store.upsert_relations([relation])
+                stored_relation = stored_relations[0]
+                provenance = Provenance(
+                    provenance_id=str(uuid4()),
+                    source_uri=chunk.source_uri,
+                    chunk_id=chunk.chunk_id,
+                    start_offset=chunk.start_offset,
+                    end_offset=chunk.end_offset,
+                    snippet=_snippet(chunk.text),
+                    extraction_run_id=run_id,
+                    model=settings.ollama_model,
+                    prompt_version=settings.prompt_version,
+                    timestamp=datetime.utcnow(),
+                )
+                graph_store.attach_provenance(stored_relation.id, provenance)
+            if settings.enable_inference and extracted_relations:
+                inferred = _infer_is_a_relations(extracted_relations)
+                if inferred:
+                    stored_inferred = graph_store.upsert_relations(inferred)
+                    for stored_relation in stored_inferred:
+                        provenance = Provenance(
+                            provenance_id=str(uuid4()),
+                            source_uri=chunk.source_uri,
+                            chunk_id=chunk.chunk_id,
+                            start_offset=chunk.start_offset,
+                            end_offset=chunk.end_offset,
+                            snippet=_snippet(chunk.text),
+                            extraction_run_id=run_id,
+                            model=settings.ollama_model,
+                            prompt_version=settings.prompt_version,
+                            timestamp=datetime.utcnow(),
+                        )
+                        graph_store.attach_provenance(stored_relation.id, provenance)
+            if settings.enable_cooccurrence and chunk_entities:
+                co_relations = _build_cooccurrence_relations(
+                    chunk_entities, settings.cooccurrence_max_entities
+                )
+                if co_relations:
+                    stored = graph_store.upsert_relations(co_relations)
+                    for stored_relation in stored:
+                        provenance = Provenance(
+                            provenance_id=str(uuid4()),
+                            source_uri=chunk.source_uri,
+                            chunk_id=chunk.chunk_id,
+                            start_offset=chunk.start_offset,
+                            end_offset=chunk.end_offset,
+                            snippet=_snippet(chunk.text),
+                            extraction_run_id=run_id,
+                            model=settings.ollama_model,
+                            prompt_version=settings.prompt_version,
+                            timestamp=datetime.utcnow(),
+                        )
+                        graph_store.attach_provenance(stored_relation.id, provenance)
+    finally:
+        if owned_client:
+            await client.aclose()
+
+
+def run_sync(
+    run_id: str,
+    graph_store: GraphStore,
+    run_store: RunStore,
+    settings: Settings,
+) -> None:
+    asyncio.run(process_run(run_id, graph_store, run_store, settings))

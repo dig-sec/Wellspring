@@ -1,0 +1,88 @@
+import { toast } from './helpers.js';
+
+/* ── tab switching ─────────────────────── */
+export function initTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      const name = btn.dataset.tab.charAt(0).toUpperCase() + btn.dataset.tab.slice(1);
+      document.getElementById('panel' + name).classList.add('active');
+
+    });
+  });
+}
+
+/* ── search + entity selection ─────────── */
+export function initSearch(onVisualize) {
+  const searchInput = document.getElementById('searchInput');
+  const entityList = document.getElementById('entityList');
+  const confInput = document.getElementById('confInput');
+  const confVal = document.getElementById('confVal');
+  let selectedEntity = null;
+  let searchTimer;
+
+  confInput.addEventListener('input', () => {
+    confVal.textContent = confInput.value;
+  });
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const q = searchInput.value.trim();
+    if (!q) {
+      entityList.innerHTML = '<div class="empty-state" style="padding:40px 0"><p>Type to search entities</p></div>';
+      return;
+    }
+    searchTimer = setTimeout(() => doSearch(q), 250);
+  });
+
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') fireVisualize();
+  });
+
+  document.getElementById('vizBtn').addEventListener('click', fireVisualize);
+
+  async function doSearch(q) {
+    try {
+      const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+      const data = await res.json();
+      if (!data.length) {
+        entityList.innerHTML = '<div class="empty-state" style="padding:20px 0"><p>No entities found</p></div>';
+        return;
+      }
+      entityList.innerHTML = data.map(e => `
+        <div class="entity-card" data-id="${e.id}" data-name="${e.name}">
+          <span class="entity-dot t-${e.type || 'unknown'}"></span>
+          <div class="entity-info">
+            <div class="entity-name">${e.name}</div>
+            <div class="entity-type">${e.type || ''}</div>
+          </div>
+        </div>
+      `).join('');
+      entityList.querySelectorAll('.entity-card').forEach(card => {
+        card.addEventListener('click', () => selectEntity(card));
+        card.addEventListener('dblclick', () => { selectEntity(card); fireVisualize(); });
+      });
+    } catch (e) {
+      toast('Search failed', 'error');
+    }
+  }
+
+  function selectEntity(card) {
+    entityList.querySelectorAll('.entity-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    selectedEntity = { id: card.dataset.id, name: card.dataset.name };
+    searchInput.value = card.dataset.name;
+  }
+
+  function fireVisualize() {
+    const seed = selectedEntity?.name || searchInput.value.trim();
+    if (seed) onVisualize(seed);
+  }
+
+  return {
+    getConfidence: () => parseFloat(confInput.value),
+    getDepth: () => parseInt(document.getElementById('depthInput').value),
+  };
+}

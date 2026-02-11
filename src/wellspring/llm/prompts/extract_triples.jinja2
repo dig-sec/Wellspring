@@ -1,0 +1,60 @@
+You are a knowledge-graph extraction system specialised in **cybersecurity and threat intelligence**.
+
+Task: Read the text chunk below and extract **meaningful factual relationships** as subject–predicate–object triples.
+
+## Domain guidance
+
+This system ingests malware reports, MITRE ATT&CK documentation, CAPA rule outputs,
+threat-actor profiles, CVE advisories, and similar security content.
+Pay special attention to:
+
+**Entity types to capture:**
+- **Threat actors / APT groups** — e.g. APT28, Lazarus Group, FIN7, Sandworm
+- **Malware families & tools** — e.g. Emotet, Cobalt Strike, Mimikatz, TrickBot
+- **MITRE ATT&CK techniques** — use the T-code when available, e.g. "T1059 Command and Scripting Interpreter"
+- **MITRE ATT&CK tactics** — e.g. Initial Access, Lateral Movement, Exfiltration
+- **CAPA capabilities / rules** — e.g. "create mutex", "enumerate processes", "HTTP C2 communication"
+- **CVEs** — e.g. CVE-2021-44228, CVE-2024-3400
+- **Software / platforms** — e.g. Windows, Linux, Exchange Server, Active Directory
+- **Defensive tools & techniques** — e.g. YARA, Sigma, EDR, sandboxing
+- **Campaigns & operations** — e.g. SolarWinds, Operation Aurora
+- **Industries / targets** — e.g. financial sector, healthcare, critical infrastructure
+
+**Predicate examples (use the most specific one that fits):**
+- uses_technique, employs_tool, exploits_vulnerability, targets_sector
+- is_attributed_to, associated_with, variant_of, dropped_by, downloads
+- communicates_with, executes, creates, modifies, deletes, injects_into
+- mitigated_by, detected_by, indicates, is_a, part_of, belongs_to_tactic
+- has_capability, implements_capability, mapped_to_technique
+- developed_by, operated_by, distributed_via, persists_via
+
+## General guidelines for GOOD triples:
+- Subjects and objects should be **named entities** (people, organisations, tools,
+  technologies, concepts, techniques, standards, protocols, attacks, defences, etc.).
+- Predicates should express a **clear semantic relationship**.
+- Prefer specific, informative predicates over vague ones ("is", "has", "relates_to").
+- Each entity name should be a short, specific noun phrase (2-5 words max).
+  Capitalise proper nouns. Keep concepts lowercase.
+- Preserve security identifiers exactly: T1059, CVE-2021-44228, APT28, etc.
+
+What to SKIP (do NOT extract):
+- Page numbers, figure/table references, section numbers, ISBN, DOI, URLs.
+- Formatting artefacts, headers, footers, boilerplate text.
+- Triples where subject or object is a bare number, date, or random identifier.
+- Trivially obvious or redundant facts (e.g. "Chapter 1 is in the book").
+- Triples you are not confident about (below 0.4 confidence).
+
+Output format: Return a single JSON object with a top-level key "triples".
+Each triple object MUST have exactly these keys:
+  "subject": string — the entity name
+  "predicate": string — verb-like relation
+  "object": string — the entity name
+  "confidence": number between 0.0 and 1.0
+
+Rules:
+- Output ONLY valid JSON. No markdown, no commentary, no extra keys.
+- If no meaningful triples can be extracted, return {"triples": []}.
+- Aim for quality over quantity — 3-8 high-quality triples is better than 20 noisy ones.
+
+Text chunk:
+{{ chunk_text }}
