@@ -7,6 +7,10 @@ let svg = null;
 let g = null;
 let ctxNode = null;
 let getConf = () => 0;
+let selectMode = false;
+const selected = { nodes: new Set(), edges: new Set() };
+let timelineData = null;
+let lastGraphQuery = null;
 
 /* entity type → color */
 const TYPE_COLORS = {
@@ -24,6 +28,31 @@ const TYPE_COLORS = {
 };
 function nodeColor(d) { return TYPE_COLORS[d.type] || '#9ca3af'; }
 
+function readDateInput(id) {
+  const el = document.getElementById(id);
+  if (!el || !el.value) return null;
+  const dt = new Date(el.value);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toISOString();
+}
+
+function currentTemporalFilters() {
+  return {
+    since: readDateInput('sinceInput'),
+    until: readDateInput('untilInput'),
+  };
+}
+
+function timelineEnabled() {
+  const input = document.getElementById('timelineToggle');
+  return input ? input.checked : true;
+}
+
+function currentTimelineInterval() {
+  const select = document.getElementById('timelineInterval');
+  return select?.value || 'month';
+}
+
 export function initGraph(getConfidence) {
   getConf = getConfidence;
 
@@ -36,7 +65,66 @@ export function initGraph(getConfidence) {
   document.getElementById('fitBtn').addEventListener('click', fitToView);
   document.getElementById('pinBtn').addEventListener('click', togglePinAll);
   document.getElementById('clearGraphBtn').addEventListener('click', clearGraph);
-  document.getElementById('exportStixBtn').addEventListener('click', exportStix);
+
+  // ── Select mode ──
+  const selectModeBtn = document.getElementById('selectModeBtn');
+  const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+
+  selectModeBtn.addEventListener('click', () => {
+    selectMode = !selectMode;
+    selectModeBtn.classList.toggle('active', selectMode);
+    if (!selectMode) clearSelection();
+    // swap zoom vs lasso behaviour on the svg
+    if (svg) {
+      if (selectMode) {
+        svg.on('.zoom', null);            // disable pan/zoom
+        svg.call(lassoDrag);              // enable lasso
+        svg.style('cursor', 'crosshair');
+      } else {
+        svg.on('.drag', null);            // remove lasso
+        svg.call(zoomBehavior);           // restore pan/zoom
+        svg.style('cursor', null);
+      }
+    }
+  });
+
+  deleteSelectedBtn.addEventListener('click', () => {
+    if (selected.nodes.size === 0 && selected.edges.size === 0) return;
+    const nBefore = graphData.nodes.length;
+    const eBefore = graphData.edges.length;
+    // remove selected nodes + any edges that connect to them
+    graphData.nodes = graphData.nodes.filter(n => !selected.nodes.has(n.id));
+    const removedNodeIds = selected.nodes;
+    graphData.edges = graphData.edges.filter(e =>
+      !selected.edges.has(e.id) &&
+      !removedNodeIds.has(e.subject_id) &&
+      !removedNodeIds.has(e.object_id)
+    );
+    const nRemoved = nBefore - graphData.nodes.length;
+    const eRemoved = eBefore - graphData.edges.length;
+    clearSelection();
+    renderGraph(graphData);
+    toast(`Removed ${nRemoved} node(s), ${eRemoved} edge(s)`, 'success');
+  });
+
+  // ── Export dropdown ──
+  const exportBtn = document.getElementById('exportBtn');
+  const exportMenu = document.getElementById('exportMenu');
+  exportBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportMenu.classList.toggle('open');
+  });
+  document.addEventListener('click', () => exportMenu.classList.remove('open'));
+  exportMenu.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+  document.querySelectorAll('.export-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const fmt = item.dataset.format;
+      exportMenu.classList.remove('open');
+      doExport(fmt);
+    });
+  });
 
   // context menu actions
   document.getElementById('ctxExpand').addEventListener('click', () => {
@@ -64,26 +152,50 @@ export function initGraph(getConfidence) {
     hideCtxMenu();
   });
 
-  // STIX export handler
-  async function exportStix() {
+  // ── Export handler ──
+  async function doExport(format) {
     if (!graphData || !graphData.nodes.length) {
       toast('Load a graph first', 'error');
       return;
     }
-    // Use the first node as seed
-    const seed = graphData.nodes[0];
+    // Send the currently visible graph to the server for conversion
+    const payload = {
+      nodes: graphData.nodes.map(n => ({ id: n.id, name: n.name, type: n.type })),
+      edges: graphData.edges.map(e => ({
+        id: e.id, subject_id: e.subject_id, predicate: e.predicate,
+        object_id: e.object_id, confidence: e.confidence, attrs: e.attrs || {},
+      })),
+    };
+
+    const EXT = { stix: 'json', json: 'json', csv: 'zip', graphml: 'graphml', markdown: 'md' };
+    const ext = EXT[format] || 'json';
+
     try {
-      const res = await fetch(`/api/export/stix?seed_id=${encodeURIComponent(seed.id)}&depth=2`);
-      if (!res.ok) throw new Error('Export failed');
-      const bundle = await res.json();
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
+      toast(`Exporting ${format.toUpperCase()} (${payload.nodes.length} nodes)…`, 'success');
+      const res = await fetch(`/api/export/${format}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Export failed');
+      }
+
+      let blob;
+      if (format === 'json' || format === 'stix') {
+        const data = await res.json();
+        blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      } else {
+        blob = await res.blob();
+      }
+
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `wellspring-stix-${new Date().toISOString().slice(0,10)}.json`;
+      a.href = URL.createObjectURL(blob);
+      a.download = `wellspring-${format}-${new Date().toISOString().slice(0,10)}.${ext}`;
       a.click();
-      URL.revokeObjectURL(url);
-      toast(`Exported ${bundle.objects?.length || 0} STIX objects`, 'success');
+      URL.revokeObjectURL(a.href);
+      toast(`${format.toUpperCase()} export downloaded`, 'success');
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -94,19 +206,49 @@ export function initGraph(getConfidence) {
       const area = document.getElementById('graphArea');
       svg.attr('width', area.clientWidth).attr('height', area.clientHeight);
     }
+    if (timelineData) renderTimeline(timelineData);
   });
 }
 
 /* ── public: load query and render ─────── */
-export async function loadGraph(seedName, depth, minConf) {
+export async function loadGraph(params, depthArg, minConfArg) {
+  const seedName = typeof params === 'string' ? params : params.seed;
+  const depth = typeof params === 'string' ? depthArg : params.depth;
+  const minConf = typeof params === 'string' ? minConfArg : params.minConfidence;
+  const since = typeof params === 'string' ? readDateInput('sinceInput') : (params.since || null);
+  const until = typeof params === 'string' ? readDateInput('untilInput') : (params.until || null);
+  const interval = typeof params === 'string'
+    ? currentTimelineInterval()
+    : (params.timelineInterval || 'month');
+  const showTimeline = typeof params === 'string'
+    ? timelineEnabled()
+    : (params.showTimeline ?? true);
+
+  lastGraphQuery = {
+    seedName,
+    depth,
+    minConf,
+    since,
+    until,
+    interval,
+    showTimeline,
+  };
+
   const btn = document.getElementById('vizBtn');
   btn.disabled = true;
   btn.textContent = 'Loading...';
   try {
+    const payload = {
+      seed_name: seedName,
+      depth,
+      min_confidence: minConf,
+      since,
+      until,
+    };
     const res = await fetch('/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seed_name: seedName, depth, min_confidence: minConf }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const e = await res.json();
@@ -114,6 +256,22 @@ export async function loadGraph(seedName, depth, minConf) {
     }
     const data = await res.json();
     renderGraph(data);
+    if (showTimeline) {
+      try {
+        await loadTimeline(seedName, {
+          depth,
+          minConf,
+          since,
+          until,
+          interval,
+        });
+      } catch (timelineErr) {
+        hideTimelinePanel();
+        toast(`Timeline unavailable: ${timelineErr.message}`, 'error');
+      }
+    } else {
+      hideTimelinePanel();
+    }
     toast(`Loaded ${data.nodes.length} nodes, ${data.edges.length} edges`, 'success');
   } catch (e) {
     toast(e.message, 'error');
@@ -123,16 +281,246 @@ export async function loadGraph(seedName, depth, minConf) {
   }
 }
 
+async function loadTimeline(seedName, { depth, minConf, since, until, interval }) {
+  const query = new URLSearchParams({
+    entity_name: seedName,
+    depth: String(depth),
+    min_confidence: String(minConf),
+    interval,
+  });
+  if (since) query.set('since', since);
+  if (until) query.set('until', until);
+
+  const res = await fetch('/api/timeline/entity?' + query.toString());
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Timeline query failed');
+  }
+  const data = await res.json();
+  renderTimeline(data);
+}
+
+function renderTimeline(data) {
+  timelineData = data;
+  const panel = document.getElementById('timelinePanel');
+  const title = document.getElementById('timelineTitle');
+  const meta = document.getElementById('timelineMeta');
+  const svgEl = document.getElementById('timelineSvg');
+  const empty = document.getElementById('timelineEmpty');
+  if (!panel || !title || !meta || !svgEl || !empty) return;
+
+  panel.style.display = 'block';
+  title.textContent = `Temporal activity: ${data.entity?.name || 'entity'}`;
+  meta.textContent = `${data.interval} buckets · depth ${data.depth} · ${data.bucket_count} points`;
+
+  const buckets = Array.isArray(data.buckets) ? data.buckets : [];
+  d3.select(svgEl).selectAll('*').remove();
+
+  if (!buckets.length) {
+    svgEl.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+
+  svgEl.style.display = 'block';
+  empty.style.display = 'none';
+
+  const W = Math.max(svgEl.clientWidth, 200);
+  const H = Math.max(svgEl.clientHeight, 80);
+  const margin = { top: 8, right: 12, bottom: 22, left: 34 };
+  const innerW = Math.max(W - margin.left - margin.right, 10);
+  const innerH = Math.max(H - margin.top - margin.bottom, 10);
+
+  const parsed = buckets
+    .map(b => ({
+      t: new Date(b.bucket_start),
+      relationCount: Number(b.relation_count || 0),
+      evidenceCount: Number(b.evidence_count || 0),
+      incomingCount: Number(b.incoming_relation_count || 0),
+      outgoingCount: Number(b.outgoing_relation_count || 0),
+    }))
+    .filter(d => !Number.isNaN(d.t.getTime()))
+    .sort((a, b) => a.t - b.t);
+
+  if (!parsed.length) {
+    svgEl.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+
+  const minT = parsed[0].t;
+  const maxT = parsed[parsed.length - 1].t;
+  const minTime = minT.getTime();
+  const maxTime = maxT.getTime();
+  const adjustedMax = maxTime === minTime ? minTime + 24 * 60 * 60 * 1000 : maxTime;
+
+  const x = d3.scaleTime()
+    .domain([new Date(minTime), new Date(adjustedMax)])
+    .range([0, innerW]);
+
+  const maxY = d3.max(parsed, d => Math.max(d.relationCount, d.evidenceCount)) || 1;
+  const y = d3.scaleLinear()
+    .domain([0, maxY])
+    .nice()
+    .range([innerH, 0]);
+
+  const root = d3.select(svgEl)
+    .attr('viewBox', `0 0 ${W} ${H}`)
+    .attr('preserveAspectRatio', 'none');
+  const chart = root.append('g')
+    .attr('transform', `translate(${margin.left},${margin.top})`);
+
+  const barWidth = Math.max(2, Math.min(14, innerW / parsed.length / 2));
+  chart.selectAll('.timeline-bar')
+    .data(parsed)
+    .enter()
+    .append('rect')
+    .attr('class', 'timeline-bar')
+    .attr('x', d => x(d.t) - barWidth / 2)
+    .attr('y', d => y(d.evidenceCount))
+    .attr('width', barWidth)
+    .attr('height', d => innerH - y(d.evidenceCount));
+
+  const line = d3.line()
+    .x(d => x(d.t))
+    .y(d => y(d.relationCount));
+  chart.append('path')
+    .datum(parsed)
+    .attr('class', 'timeline-line')
+    .attr('d', line);
+
+  chart.selectAll('.timeline-dot')
+    .data(parsed)
+    .enter()
+    .append('circle')
+    .attr('class', 'timeline-dot')
+    .attr('cx', d => x(d.t))
+    .attr('cy', d => y(d.relationCount))
+    .attr('r', 2.8)
+    .append('title')
+    .text(d => {
+      const date = d.t.toISOString().slice(0, 10);
+      return `${date}
+relations=${d.relationCount}
+evidence=${d.evidenceCount}
+incoming=${d.incomingCount}
+outgoing=${d.outgoingCount}`;
+    });
+
+  chart.append('g')
+    .attr('class', 'timeline-axis')
+    .attr('transform', `translate(0,${innerH})`)
+    .call(d3.axisBottom(x).ticks(6));
+
+  chart.append('g')
+    .attr('class', 'timeline-axis')
+    .call(d3.axisLeft(y).ticks(4));
+}
+
+function hideTimelinePanel() {
+  timelineData = null;
+  const panel = document.getElementById('timelinePanel');
+  const svgEl = document.getElementById('timelineSvg');
+  const empty = document.getElementById('timelineEmpty');
+  if (panel) panel.style.display = 'none';
+  if (svgEl) d3.select(svgEl).selectAll('*').remove();
+  if (empty) empty.style.display = 'none';
+}
+
+/* ── selection helpers ──────────────────── */
+function clearSelection() {
+  selected.nodes.clear();
+  selected.edges.clear();
+  updateSelectionVisuals();
+}
+
+function toggleSelectNode(id) {
+  if (selected.nodes.has(id)) selected.nodes.delete(id);
+  else selected.nodes.add(id);
+  updateSelectionVisuals();
+}
+
+function toggleSelectEdge(id) {
+  if (selected.edges.has(id)) selected.edges.delete(id);
+  else selected.edges.add(id);
+  updateSelectionVisuals();
+}
+
+function updateSelectionVisuals() {
+  if (!g) return;
+  g.selectAll('.node').classed('selected', d => selected.nodes.has(d.id));
+  g.selectAll('.link').classed('selected', d => selected.edges.has(d.id));
+  const total = selected.nodes.size + selected.edges.size;
+  const btn = document.getElementById('deleteSelectedBtn');
+  const cnt = document.getElementById('selCount');
+  if (btn) btn.style.display = total > 0 ? 'inline-flex' : 'none';
+  if (cnt) cnt.textContent = total;
+}
+
+/* ── lasso rectangle drag ──────────────── */
+const lassoDrag = d3.drag()
+  .on('start', function(event) {
+    if (!selectMode) return;
+    const [x, y] = d3.pointer(event, g.node());
+    g.append('rect')
+      .attr('class', 'lasso-rect')
+      .attr('x', x).attr('y', y)
+      .attr('width', 0).attr('height', 0)
+      .datum({ x0: x, y0: y });
+  })
+  .on('drag', function(event) {
+    const rect = g.select('.lasso-rect');
+    if (rect.empty()) return;
+    const d = rect.datum();
+    const [cx, cy] = d3.pointer(event, g.node());
+    rect.attr('x', Math.min(d.x0, cx))
+        .attr('y', Math.min(d.y0, cy))
+        .attr('width', Math.abs(cx - d.x0))
+        .attr('height', Math.abs(cy - d.y0));
+  })
+  .on('end', function(event) {
+    const rect = g.select('.lasso-rect');
+    if (rect.empty()) return;
+    const rx = +rect.attr('x'), ry = +rect.attr('y');
+    const rw = +rect.attr('width'), rh = +rect.attr('height');
+    rect.remove();
+    if (rw < 5 && rh < 5) return; // too small, ignore
+    // select nodes inside the rectangle
+    if (graphData) {
+      graphData.nodes.forEach(n => {
+        if (n.x >= rx && n.x <= rx + rw && n.y >= ry && n.y <= ry + rh) {
+          selected.nodes.add(n.id);
+        }
+      });
+    }
+    // select edges whose midpoint is inside the rectangle
+    if (g) {
+      g.selectAll('.link').each(d => {
+        const mx = (d.source.x + d.target.x) / 2;
+        const my = (d.source.y + d.target.y) / 2;
+        if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) {
+          selected.edges.add(d.id);
+        }
+      });
+    }
+    updateSelectionVisuals();
+  });
+
 /* ── clear ─────────────────────────────── */
 function clearGraph() {
-  const area = document.getElementById('graphArea');
-  const oldSvg = area.querySelector('svg');
-  if (oldSvg) oldSvg.remove();
+  document.querySelectorAll('#graphArea svg.kg-svg').forEach(el => el.remove());
   document.getElementById('graphEmpty').style.display = 'flex';
   document.getElementById('graphToolbar').style.display = 'none';
+  const er = document.getElementById('exportRow');
+  if (er) er.style.display = 'none';
   if (sim) sim.stop();
   sim = null;
   graphData = null;
+  selectMode = false;
+  clearSelection();
+  const smb = document.getElementById('selectModeBtn');
+  if (smb) smb.classList.remove('active');
+  hideTimelinePanel();
 }
 
 /* ── render ────────────────────────────── */
@@ -143,6 +531,8 @@ function renderGraph(data) {
 
   document.getElementById('graphEmpty').style.display = 'none';
   document.getElementById('graphToolbar').style.display = 'flex';
+  const exportRow = document.getElementById('exportRow');
+  if (exportRow) exportRow.style.display = 'flex';
 
   const area = document.getElementById('graphArea');
   const W = area.clientWidth;
@@ -152,6 +542,7 @@ function renderGraph(data) {
 
   svg = d3.select('#graphArea')
     .append('svg')
+    .attr('class', 'kg-svg')
     .attr('width', W)
     .attr('height', H)
     .call(zoomBehavior);
@@ -178,7 +569,11 @@ function renderGraph(data) {
       if (d.origin === 'cooccurrence') return 'link cooccurrence';
       return 'link';
     })
-    .attr('stroke-width', d => 1 + d.confidence);
+    .attr('stroke-width', d => 1 + d.confidence)
+    .style('cursor', 'pointer')
+    .on('click', (event, d) => {
+      if (selectMode) { event.stopPropagation(); toggleSelectEdge(d.id); }
+    });
 
   const edgeLabel = g.selectAll('.edge-label')
     .data(links)
@@ -208,7 +603,12 @@ function renderGraph(data) {
     .attr('stroke-width', 1.5)
     .style('cursor', 'pointer')
     .on('mouseover', function() { d3.select(this).attr('stroke-width', 2.5); })
-    .on('mouseout', function() { d3.select(this).attr('stroke-width', 1.5); })
+    .on('mouseout', function(event, d) {
+      d3.select(this).attr('stroke-width', selected.nodes.has(d.id) ? 3 : 1.5);
+    })
+    .on('click', (event, d) => {
+      if (selectMode) { event.stopPropagation(); toggleSelectNode(d.id); }
+    })
     .on('contextmenu', (event, d) => { event.preventDefault(); showCtxMenu(event, d); })
     .on('dblclick', (event, d) => { event.stopPropagation(); expandNode(d); });
 
@@ -237,6 +637,13 @@ function renderGraph(data) {
       .attr('x', d => (d.source.x + d.target.x) / 2)
       .attr('y', d => (d.source.y + d.target.y) / 2);
   });
+
+  // Re-apply select mode if it was active before re-render
+  if (selectMode) {
+    svg.on('.zoom', null);
+    svg.call(lassoDrag);
+    svg.style('cursor', 'crosshair');
+  }
 }
 
 /* ── drag handlers ─────────────────────── */
@@ -286,10 +693,22 @@ function removeNode(nodeId) {
 
 async function expandNode(d) {
   try {
+    const temporal = currentTemporalFilters();
+    if (lastGraphQuery) {
+      lastGraphQuery.since = temporal.since;
+      lastGraphQuery.until = temporal.until;
+      lastGraphQuery.interval = currentTimelineInterval();
+    }
     const res = await fetch('/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seed_id: d.id, depth: 1, min_confidence: getConf() }),
+      body: JSON.stringify({
+        seed_id: d.id,
+        depth: 1,
+        min_confidence: getConf(),
+        since: temporal.since,
+        until: temporal.until,
+      }),
     });
     if (!res.ok) throw new Error('Expand failed');
     const data = await res.json();
@@ -299,6 +718,19 @@ async function expandNode(d) {
     data.nodes.forEach(n => { if (!existingIds.has(n.id)) { graphData.nodes.push(n); added++; } });
     data.edges.forEach(e => { if (!existingEdges.has(e.id)) graphData.edges.push(e); });
     renderGraph(graphData);
+    if (timelineEnabled() && lastGraphQuery) {
+      try {
+        await loadTimeline(lastGraphQuery.seedName, {
+          depth: lastGraphQuery.depth,
+          minConf: lastGraphQuery.minConf,
+          since: lastGraphQuery.since,
+          until: lastGraphQuery.until,
+          interval: lastGraphQuery.interval,
+        });
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }
     toast(`Expanded: +${added} nodes`, 'success');
   } catch (e) {
     toast(e.message, 'error');

@@ -409,6 +409,27 @@ class SQLiteGraphStore(GraphStore):
             ],
         )
 
+    def get_full_graph(self, min_confidence: float = 0.0) -> Subgraph:
+        """Return a Subgraph containing ALL entities and relations."""
+        ent_rows = self.conn.execute("SELECT * FROM entities").fetchall()
+        rel_rows = self.conn.execute(
+            "SELECT * FROM relations WHERE confidence >= ?", (min_confidence,)
+        ).fetchall()
+        return Subgraph(
+            nodes=[SubgraphNode(id=r["id"], name=r["name"], type=r["type"]) for r in ent_rows],
+            edges=[
+                SubgraphEdge(
+                    id=r["id"],
+                    subject_id=r["subject_id"],
+                    predicate=r["predicate"],
+                    object_id=r["object_id"],
+                    confidence=r["confidence"],
+                    attrs=json.loads(r["attrs"]) if r["attrs"] else {},
+                )
+                for r in rel_rows
+            ],
+        )
+
     def _fetch_entities_by_ids(self, ids: Iterable[str]) -> List[Entity]:
         placeholders = ",".join("?" for _ in ids)
         rows = self.conn.execute(
@@ -473,6 +494,14 @@ class SQLiteGraphStore(GraphStore):
             if row:
                 runs.append(_row_to_run(row))
         return relation, provenance, runs
+
+    def count_entities(self) -> int:
+        row = self.conn.execute("SELECT count(*) FROM entities").fetchone()
+        return int(row[0] if row else 0)
+
+    def count_relations(self) -> int:
+        row = self.conn.execute("SELECT count(*) FROM relations").fetchone()
+        return int(row[0] if row else 0)
 
 
 class SQLiteRunStore(RunStore):
@@ -540,8 +569,12 @@ class SQLiteRunStore(RunStore):
     def claim_next_run(self) -> Optional[ExtractionRun]:
         try:
             self.conn.execute("BEGIN IMMEDIATE")
+            # Prioritise smaller documents so more files get processed sooner
             row = self.conn.execute(
-                "SELECT * FROM runs WHERE status = 'pending' ORDER BY started_at LIMIT 1"
+                "SELECT r.* FROM runs r "
+                "LEFT JOIN documents d ON d.run_id = r.run_id "
+                "WHERE r.status = 'pending' "
+                "ORDER BY length(coalesce(d.text,'')), r.started_at LIMIT 1"
             ).fetchone()
             if not row:
                 self.conn.execute("COMMIT")
@@ -612,3 +645,32 @@ class SQLiteRunStore(RunStore):
             (limit,),
         ).fetchall()
         return [_row_to_run(row) for row in rows]
+
+    def delete_all_runs(self) -> int:
+        row = self.conn.execute("SELECT count(*) FROM runs").fetchone()
+        count = int(row[0] if row else 0)
+        self.conn.execute("DELETE FROM chunks")
+        self.conn.execute("DELETE FROM documents")
+        self.conn.execute("DELETE FROM runs")
+        self.conn.commit()
+        return count
+
+    def count_runs(
+        self,
+        status: Optional[str] = None,
+        since: Optional[datetime] = None,
+    ) -> int:
+        where: List[str] = []
+        params: List[Any] = []
+        if status:
+            where.append("status = ?")
+            params.append(status)
+        if since:
+            where.append("started_at > ?")
+            params.append(since.isoformat())
+
+        sql = "SELECT count(*) FROM runs"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        row = self.conn.execute(sql, params).fetchone()
+        return int(row[0] if row else 0)

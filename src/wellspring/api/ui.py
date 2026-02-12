@@ -24,6 +24,17 @@ def render_root_ui() -> str:
     <a href="/docs" target="_blank" class="btn btn-outline btn-sm">API Docs</a>
   </header>
 
+  <!-- ─── INGESTION PROGRESS ──────────────── -->
+  <div class="ingest-bar" id="ingestBar">
+    <div class="ingest-bar-inner">
+      <div class="ingest-counts" id="ingestCounts"></div>
+      <div class="ingest-track">
+        <div class="ingest-fill" id="ingestFill"></div>
+      </div>
+      <div class="ingest-rate" id="ingestRate"></div>
+    </div>
+  </div>
+
   <!-- ─── MAIN ────────────────────────────── -->
   <main>
     <aside class="sidebar">
@@ -48,8 +59,49 @@ def render_root_ui() -> str:
               <span class="range-val" id="confVal">0.0</span>
             </div>
           </div>
+          <div class="controls temporal-controls">
+            <div class="ctrl-group">
+              <label>Since</label>
+              <input type="datetime-local" id="sinceInput" />
+            </div>
+            <div class="ctrl-group">
+              <label>Until</label>
+              <input type="datetime-local" id="untilInput" />
+            </div>
+          </div>
+          <div class="controls temporal-controls">
+            <div class="ctrl-group">
+              <label>Timeline interval</label>
+              <select id="timelineInterval">
+                <option value="day">Day</option>
+                <option value="week">Week</option>
+                <option value="month" selected>Month</option>
+                <option value="quarter">Quarter</option>
+                <option value="year">Year</option>
+              </select>
+            </div>
+            <div class="ctrl-group checkbox-group">
+              <label>&nbsp;</label>
+              <label class="check-inline">
+                <input type="checkbox" id="timelineToggle" checked />
+                <span>Show timeline</span>
+              </label>
+            </div>
+          </div>
           <div class="btn-row">
             <button class="btn btn-primary" id="vizBtn" style="flex:1">Visualize</button>
+          </div>
+          <div class="btn-row" id="exportRow" style="display:none;margin-top:6px">
+            <div class="export-dropdown sidebar-export" id="exportDropdown" style="flex:1">
+              <button class="btn btn-outline" id="exportBtn" style="width:100%;font-size:12px">&#x2B07; Export visible graph</button>
+              <div class="export-menu" id="exportMenu">
+                <button class="export-item" data-format="stix">STIX 2.1 (.json)</button>
+                <button class="export-item" data-format="json">JSON (.json)</button>
+                <button class="export-item" data-format="csv">CSV (.zip)</button>
+                <button class="export-item" data-format="graphml">GraphML &mdash; Gephi (.graphml)</button>
+                <button class="export-item" data-format="markdown">Markdown (.md)</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -108,7 +160,9 @@ def render_root_ui() -> str:
         <button class="btn btn-sm" id="zoomOutBtn" title="Zoom out">&minus;</button>
         <button class="btn btn-sm" id="fitBtn" title="Fit to view">&#8862;</button>
         <button class="btn btn-sm" id="pinBtn" title="Pin / unpin all">&#128204;</button>
-        <button class="btn btn-sm" id="exportStixBtn" title="Export STIX 2.1">STIX</button>
+        <span class="toolbar-sep"></span>
+        <button class="btn btn-sm" id="selectModeBtn" title="Toggle select mode">&#9632; Select</button>
+        <button class="btn btn-sm btn-danger" id="deleteSelectedBtn" title="Remove selected" style="display:none">&#x1F5D1; Remove (<span id="selCount">0</span>)</button>
         <button class="btn btn-sm" id="clearGraphBtn" title="Clear graph">&times;</button>
       </div>
       <div class="empty-state" id="graphEmpty">
@@ -117,6 +171,16 @@ def render_root_ui() -> str:
           <circle cx="18" cy="6" r="3"/><path d="M8.5 8l7 7M8.5 6h7"/>
         </svg>
         <p>Search an entity and click Visualize</p>
+      </div>
+      <div class="timeline-panel" id="timelinePanel" style="display:none">
+        <div class="timeline-head">
+          <div class="timeline-title" id="timelineTitle">Temporal activity</div>
+          <div class="timeline-meta" id="timelineMeta"></div>
+        </div>
+        <svg id="timelineSvg"></svg>
+        <div class="timeline-empty" id="timelineEmpty" style="display:none">
+          No temporal evidence in the selected window.
+        </div>
       </div>
       <div class="context-menu" id="ctxMenu">
         <button class="ctx-item" id="ctxExpand">Expand this node</button>

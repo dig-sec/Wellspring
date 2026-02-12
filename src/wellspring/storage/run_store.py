@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..schemas import Chunk, ExtractionRun
@@ -47,4 +48,16 @@ class RunStore(ABC):
 
     @abstractmethod
     def list_recent_runs(self, limit: int = 50) -> List[ExtractionRun]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_all_runs(self) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_runs(
+        self,
+        status: Optional[str] = None,
+        since: Optional[datetime] = None,
+    ) -> int:
         raise NotImplementedError

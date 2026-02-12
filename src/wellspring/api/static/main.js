@@ -6,8 +6,8 @@ import { initOpenCTI } from './opencti.js';
 /* ── bootstrap ────────────────────────── */
 initTabs();
 
-const search = initSearch(seed => {
-  loadGraph(seed, search.getDepth(), search.getConfidence());
+const search = initSearch(params => {
+  loadGraph(params);
 });
 
 initGraph(search.getConfidence);

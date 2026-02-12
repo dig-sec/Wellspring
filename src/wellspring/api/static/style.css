@@ -49,6 +49,45 @@ header {
 header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
 header .spacer { flex: 1; }
 
+/* ── ingestion progress bar ───────────────── */
+.ingest-bar {
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  padding: 0;
+  overflow: hidden;
+  transition: max-height 0.3s;
+  max-height: 36px;
+}
+.ingest-bar.hidden { max-height: 0; padding: 0; border: none; }
+.ingest-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 24px;
+  font-size: 11px;
+  font-family: monospace;
+  color: #94a3b8;
+}
+.ingest-counts { white-space: nowrap; }
+.ingest-counts .val { color: #e2e8f0; font-weight: 600; }
+.ingest-track {
+  flex: 1;
+  height: 6px;
+  background: #334155;
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 80px;
+}
+.ingest-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #22c55e);
+  border-radius: 3px;
+  transition: width 0.6s ease;
+  width: 0%;
+}
+.ingest-rate { white-space: nowrap; color: #64748b; }
+.ingest-rate .active { color: #22c55e; }
+
 /* ── tabs ─────────────────────────────────── */
 .tab-bar {
   display: flex;
@@ -116,6 +155,7 @@ main { display: flex; flex: 1; overflow: hidden; }
 
 /* ── controls row ─────────────────────────── */
 .controls { display: flex; gap: 8px; margin-top: 10px; }
+.temporal-controls { margin-top: 8px; }
 .ctrl-group { flex: 1; }
 .ctrl-group label {
   display: block;
@@ -140,6 +180,19 @@ main { display: flex; flex: 1; overflow: hidden; }
   accent-color: var(--accent);
 }
 .range-val { font-size: 11px; color: var(--muted); }
+.checkbox-group { display: flex; flex-direction: column; justify-content: flex-end; }
+.check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: white;
+  font-size: 12px;
+  color: var(--ink);
+}
+.check-inline input[type="checkbox"] { accent-color: var(--accent); }
 
 /* ── buttons ──────────────────────────────── */
 .btn {
@@ -285,6 +338,122 @@ main { display: flex; flex: 1; overflow: hidden; }
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
 .graph-toolbar .btn:hover { background: white; }
+.graph-toolbar .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.graph-toolbar .btn.active:hover { background: var(--accent-hover); }
+.graph-toolbar .btn-danger { background: #fee2e2; color: var(--danger); border-color: #fca5a5; }
+.graph-toolbar .btn-danger:hover { background: #fecaca; }
+.toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
+
+/* ── timeline panel ──────────────────────── */
+.timeline-panel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 12;
+  background: rgba(255,255,255,0.94);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.1);
+  padding: 10px 12px;
+}
+.timeline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.timeline-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #111827;
+}
+.timeline-meta {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#timelineSvg {
+  width: 100%;
+  height: 120px;
+  display: block;
+}
+.timeline-empty {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  padding: 38px 0;
+}
+.timeline-bar { fill: rgba(37, 99, 235, 0.22); }
+.timeline-line {
+  fill: none;
+  stroke: #1d4ed8;
+  stroke-width: 2;
+}
+.timeline-dot {
+  fill: #1d4ed8;
+  stroke: white;
+  stroke-width: 1.5;
+}
+.timeline-axis text {
+  fill: #6b7280;
+  font-size: 10px;
+}
+.timeline-axis line,
+.timeline-axis path {
+  stroke: #d1d5db;
+}
+
+/* ── export dropdown ──────────────────────── */
+.export-dropdown {
+  position: relative;
+}
+.export-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  padding: 4px;
+  z-index: 60;
+  min-width: 210px;
+}
+.export-menu.open { display: block; }
+.sidebar-export .export-menu {
+  top: auto;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+.export-item {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  color: #e5e7eb;
+  font-size: 13px;
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.export-item:hover {
+  background: #374151;
+  color: white;
+}
 
 /* ── context menu ─────────────────────────── */
 .context-menu {
@@ -315,9 +484,12 @@ main { display: flex; flex: 1; overflow: hidden; }
 
 /* ── graph elements ───────────────────────── */
 .link { stroke: #9ca3af; stroke-opacity: 0.7; stroke-width: 1.5px; }
+.link.selected { stroke: var(--accent); stroke-opacity: 1; stroke-width: 3px; }
 .link.inferred { stroke-dasharray: 6 4; stroke: #64748b; }
 .link.cooccurrence { stroke-dasharray: 3 3; stroke: #9aa3af; stroke-opacity: 0.4; }
+.node.selected circle { stroke: var(--accent); stroke-width: 3; filter: drop-shadow(0 0 6px rgba(37,99,235,0.5)); }
 .node-label { font-size: 12px; pointer-events: none; user-select: none; }
+.lasso-rect { fill: rgba(37,99,235,0.08); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 2; }
 .edge-label { font-size: 10px; fill: #374151; pointer-events: none; user-select: none; }
 
 /* ── task status bar ──────────────────────── */

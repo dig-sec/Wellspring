@@ -1,19 +1,53 @@
-"""OpenCTI GraphQL client for Wellspring integration."""
+"""OpenCTI GraphQL client for Wellspring integration.
+
+All methods are synchronous — designed to run in a background thread
+so they never block the FastAPI event loop.
+"""
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 import httpx
 
 logger = logging.getLogger(__name__)
 
+# ── Inline fragments reused across queries ──────────────────────
+_INLINE = """
+                        ... on BasicObject {
+                          id
+                          entity_type
+                        }
+                        ... on AttackPattern { name }
+                        ... on Campaign { name }
+                        ... on Malware { name }
+                        ... on Tool { name }
+                        ... on Vulnerability { name }
+                        ... on ThreatActorGroup { name }
+                        ... on ThreatActorIndividual { name }
+                        ... on IntrusionSet { name }
+                        ... on Infrastructure { name }
+                        ... on Indicator { name }
+                        ... on Identity { name }
+                        ... on CourseOfAction { name }
+                        ... on Report { name }"""
+
+_QUERY_NAME_MAP = {
+    "Malware": "malwares",
+    "Threat-Actor": "threatActorsGroup",
+    "Attack-Pattern": "attackPatterns",
+    "Tool": "tools",
+    "Vulnerability": "vulnerabilities",
+    "Campaign": "campaigns",
+    "Intrusion-Set": "intrusionSets",
+    "Indicator": "indicators",
+    "Infrastructure": "infrastructures",
+    "Report": "reports",
+    "Course-Of-Action": "coursesOfAction",
+}
+
 
 class OpenCTIClient:
-    """Synchronous GraphQL client for OpenCTI API.
-
-    Designed to run in a background thread so it never blocks the
-    async event loop.
-    """
+    """Synchronous GraphQL client for OpenCTI API."""
 
     def __init__(self, base_url: str, api_token: str, timeout: float = 120.0):
         self.base_url = base_url.rstrip("/")
@@ -54,43 +88,29 @@ class OpenCTIClient:
 
         return data.get("data", {})
 
-    # ── Inline fragments shared across queries ──────────────────
-    _INLINE = """
-                        ... on BasicObject {
-                          id
-                          entity_type
-                        }
-                        ... on AttackPattern { name }
-                        ... on Campaign { name }
-                        ... on Malware { name }
-                        ... on Tool { name }
-                        ... on Vulnerability { name }
-                        ... on ThreatActorGroup { name }
-                        ... on ThreatActorIndividual { name }
-                        ... on IntrusionSet { name }
-                        ... on Infrastructure { name }
-                        ... on Indicator { name }
-                        ... on Identity { name }
-                        ... on CourseOfAction { name }
-                        ... on Report { name }"""
+    # ────────────────────────────────────────────────────────────
+    # Streaming page-by-page iterators (constant memory)
+    # ────────────────────────────────────────────────────────────
 
-    def list_entities_with_relations(
+    def iter_entities(
         self,
         entity_type: str,
-        first: int = 50,
-    ) -> List[Dict[str, Any]]:
-        """List ALL entities of a type with their first-hop relationships.
+        page_size: int = 100,
+        on_page: Optional[Callable[[int], None]] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """Yield entities one at a time, fetching pages transparently.
 
-        Uses cursor-based pagination to fetch everything.
+        *on_page(total_so_far)* is called after each page is fetched,
+        useful for progress reporting.
         """
-        query_name = self._get_query_name(entity_type)
-
-        all_entities: List[Dict[str, Any]] = []
+        query_name = _QUERY_NAME_MAP.get(entity_type, entity_type.lower() + "s")
         cursor: Optional[str] = None
-        page_size = min(first, 100)
+        total = 0
+        include_rel_timestamps = True
 
         while True:
             after_clause = f', after: "{cursor}"' if cursor else ""
+            created_at_field = "\n                          created_at" if include_rel_timestamps else ""
             gql = f"""
             {{
               {query_name}(first: {page_size}{after_clause}, orderBy: created_at, orderMode: desc) {{
@@ -108,12 +128,12 @@ class OpenCTIClient:
                         node {{
                           id
                           relationship_type
-                          confidence
+                          confidence{created_at_field}
                           from {{
-{self._INLINE}
+{_INLINE}
                           }}
                           to {{
-{self._INLINE}
+{_INLINE}
                           }}
                         }}
                       }}
@@ -126,8 +146,22 @@ class OpenCTIClient:
             try:
                 result = self.query(gql)
             except Exception as exc:
+                msg = str(exc)
+                if (
+                    include_rel_timestamps
+                    and "created_at" in msg
+                    and (
+                        "Cannot query field" in msg
+                        or "Unknown field" in msg
+                    )
+                ):
+                    logger.warning(
+                        "OpenCTI relation created_at field unavailable; retrying without it"
+                    )
+                    include_rel_timestamps = False
+                    continue
                 logger.warning("Failed to list %s (cursor=%s): %s", entity_type, cursor, exc)
-                break
+                return
 
             data = result.get(query_name, {})
             edges = data.get("edges", [])
@@ -136,9 +170,7 @@ class OpenCTIClient:
             for edge in edges:
                 node = edge.get("node", {})
                 relations = []
-                for rel_edge in (
-                    node.get("stixCoreRelationships", {}).get("edges", [])
-                ):
+                for rel_edge in node.get("stixCoreRelationships", {}).get("edges", []):
                     rel = rel_edge.get("node", {})
                     from_obj = rel.get("from") or {}
                     to_obj = rel.get("to") or {}
@@ -146,6 +178,7 @@ class OpenCTIClient:
                         "id": rel.get("id"),
                         "type": rel.get("relationship_type"),
                         "confidence": rel.get("confidence", 50),
+                        "timestamp": rel.get("created_at"),
                         "from_id": from_obj.get("id"),
                         "from_name": from_obj.get("name", "unknown"),
                         "from_type": from_obj.get("entity_type", "unknown"),
@@ -154,50 +187,29 @@ class OpenCTIClient:
                         "to_type": to_obj.get("entity_type", "unknown"),
                     })
 
-                all_entities.append({
+                total += 1
+                yield {
                     "id": node.get("id"),
                     "name": node.get("name", "unknown"),
                     "type": entity_type,
                     "description": (node.get("description") or ""),
                     "relations": relations,
-                })
+                }
 
-            logger.info(
-                "Fetched page of %d %s (total %d so far)",
-                len(edges), entity_type, len(all_entities),
-            )
+            logger.info("Fetched page of %d %s (total %d so far)", len(edges), entity_type, total)
+            if on_page:
+                on_page(total)
 
             if not page_info.get("hasNextPage") or not edges:
-                break
+                return
             cursor = page_info.get("endCursor")
 
-        return all_entities
-
-    def _get_query_name(self, entity_type: str) -> str:
-        """Map entity type to GraphQL query name."""
-        mapping = {
-            "Malware": "malwares",
-            "Threat-Actor": "threatActorsGroup",
-            "Attack-Pattern": "attackPatterns",
-            "Tool": "tools",
-            "Vulnerability": "vulnerabilities",
-            "Campaign": "campaigns",
-            "Intrusion-Set": "intrusionSets",
-            "Indicator": "indicators",
-            "Infrastructure": "infrastructures",
-            "Report": "reports",
-            "Course-Of-Action": "coursesOfAction",
-        }
-        return mapping.get(entity_type, entity_type.lower() + "s")
-
-    def list_reports_with_objects(
+    def iter_reports(
         self,
-        first: int = 50,
-    ) -> List[Dict[str, Any]]:
-        """List ALL reports with their contained STIX objects.
-
-        Uses cursor-based pagination.
-        """
+        page_size: int = 100,
+        on_page: Optional[Callable[[int], None]] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """Yield reports one at a time with contained objects."""
         _INLINE_SIMPLE = """
                           ... on BasicObject { id entity_type }
                           ... on AttackPattern { name }
@@ -213,12 +225,13 @@ class OpenCTIClient:
                           ... on Identity { name }
                           ... on CourseOfAction { name }"""
 
-        all_reports: List[Dict[str, Any]] = []
         cursor: Optional[str] = None
-        page_size = min(first, 100)
+        total = 0
+        include_rel_timestamps = True
 
         while True:
             after_clause = f', after: "{cursor}"' if cursor else ""
+            created_at_field = "\n                            created_at" if include_rel_timestamps else ""
             gql = f"""
             {{
               reports(first: {page_size}{after_clause}, orderBy: created_at, orderMode: desc) {{
@@ -255,7 +268,7 @@ class OpenCTIClient:
                           ... on StixCoreRelationship {{
                             id
                             relationship_type
-                            confidence
+                            confidence{created_at_field}
                             from {{
 {_INLINE_SIMPLE}
                             }}
@@ -274,8 +287,22 @@ class OpenCTIClient:
             try:
                 result = self.query(gql)
             except Exception as exc:
+                msg = str(exc)
+                if (
+                    include_rel_timestamps
+                    and "created_at" in msg
+                    and (
+                        "Cannot query field" in msg
+                        or "Unknown field" in msg
+                    )
+                ):
+                    logger.warning(
+                        "OpenCTI report relationship created_at field unavailable; retrying without it"
+                    )
+                    include_rel_timestamps = False
+                    continue
                 logger.warning("Failed to list reports (cursor=%s): %s", cursor, exc)
-                break
+                return
 
             data = result.get("reports", {})
             edges = data.get("edges", [])
@@ -297,6 +324,7 @@ class OpenCTIClient:
                             "id": obj.get("id"),
                             "type": obj.get("relationship_type"),
                             "confidence": obj.get("confidence", 50),
+                            "timestamp": obj.get("created_at"),
                             "from_id": from_obj.get("id"),
                             "from_name": from_obj.get("name", "unknown"),
                             "from_type": from_obj.get("entity_type", "unknown"),
@@ -316,25 +344,22 @@ class OpenCTIClient:
                     text_parts.append(node["description"])
                 if node.get("content"):
                     text_parts.append(node["content"])
-                full_text = "\n\n".join(text_parts)
 
-                all_reports.append({
+                total += 1
+                yield {
                     "id": node.get("id"),
                     "name": node.get("name", "unknown"),
                     "description": (node.get("description") or "")[:1000],
-                    "text": full_text,
+                    "text": "\n\n".join(text_parts),
                     "published": node.get("published"),
                     "objects": contained_objects,
                     "relations": contained_relations,
-                })
+                }
 
-            logger.info(
-                "Fetched page of %d reports (total %d so far)",
-                len(edges), len(all_reports),
-            )
+            logger.info("Fetched page of %d reports (total %d so far)", len(edges), total)
+            if on_page:
+                on_page(total)
 
             if not page_info.get("hasNextPage") or not edges:
-                break
+                return
             cursor = page_info.get("endCursor")
-
-        return all_reports

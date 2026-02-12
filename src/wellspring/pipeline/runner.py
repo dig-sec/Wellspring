@@ -112,6 +112,13 @@ async def process_run(
         max_chars=settings.chunk_size,
         overlap=settings.chunk_overlap,
     )
+    # Cap chunks per run to avoid a single huge document blocking the queue
+    if settings.max_chunks_per_run and len(chunks) > settings.max_chunks_per_run:
+        logger.info(
+            "Run %s: capping %d chunks to %d",
+            run_id, len(chunks), settings.max_chunks_per_run,
+        )
+        chunks = chunks[: settings.max_chunks_per_run]
     run_store.store_chunks(run_id, chunks)
 
     resolver = EntityResolver(graph_store)

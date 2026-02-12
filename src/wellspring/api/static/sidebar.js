@@ -20,6 +20,10 @@ export function initSearch(onVisualize) {
   const entityList = document.getElementById('entityList');
   const confInput = document.getElementById('confInput');
   const confVal = document.getElementById('confVal');
+  const sinceInput = document.getElementById('sinceInput');
+  const untilInput = document.getElementById('untilInput');
+  const timelineIntervalInput = document.getElementById('timelineInterval');
+  const timelineToggleInput = document.getElementById('timelineToggle');
   let selectedEntity = null;
   let searchTimer;
 
@@ -78,11 +82,28 @@ export function initSearch(onVisualize) {
 
   function fireVisualize() {
     const seed = selectedEntity?.name || searchInput.value.trim();
-    if (seed) onVisualize(seed);
+    if (!seed) return;
+    onVisualize({
+      seed,
+      depth: parseInt(document.getElementById('depthInput').value, 10),
+      minConfidence: parseFloat(confInput.value),
+      since: _toIsoDateTime(sinceInput?.value || ''),
+      until: _toIsoDateTime(untilInput?.value || ''),
+      timelineInterval: timelineIntervalInput?.value || 'month',
+      showTimeline: timelineToggleInput?.checked ?? true,
+    });
   }
 
   return {
     getConfidence: () => parseFloat(confInput.value),
-    getDepth: () => parseInt(document.getElementById('depthInput').value),
+    getDepth: () => parseInt(document.getElementById('depthInput').value, 10),
   };
+}
+
+
+function _toIsoDateTime(value) {
+  if (!value) return null;
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toISOString();
 }

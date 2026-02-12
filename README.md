@@ -35,7 +35,11 @@ Open `http://localhost:8000/visualize?seed_name=Ada%20Lovelace&depth=1`
 Environment variables:
 - `OLLAMA_BASE_URL` (default: `http://host.docker.internal:11434`)
 - `OLLAMA_MODEL` (default: `llama3.1`)
-- `DB_PATH` (default: `/data/wellspring.db`)
+- `ELASTICSEARCH_HOST` (default: `http://127.0.0.1:9200`, comma-separated for multiple hosts)
+- `ELASTICSEARCH_USER` (default: empty)
+- `ELASTICSEARCH_PASSWORD` (default: empty)
+- `ELASTICSEARCH_INDEX_PREFIX` (default: `wellspring`)
+- `ELASTICSEARCH_VERIFY_CERTS` (default: `1`)
 - `CHUNK_SIZE` (default: `1200`)
 - `CHUNK_OVERLAP` (default: `200`)
 - `PROMPT_VERSION` (default: `v1`)
@@ -43,5 +47,58 @@ Environment variables:
 - `ENABLE_COOCCURRENCE` (default: `0`)
 - `CO_OCCURRENCE_MAX_ENTITIES` (default: `25`)
 - `ENABLE_INFERENCE` (default: `0`)
+- `METRICS_ROLLUP_ENABLED` (default: `1`)
+- `METRICS_ROLLUP_INTERVAL_SECONDS` (default: `900`)
+- `METRICS_ROLLUP_LOOKBACK_DAYS` (default: `365`)
+- `METRICS_ROLLUP_MIN_CONFIDENCE` (default: `0.0`)
 
 Inference (when enabled) currently applies a simple transitive rule for `is_a` relations within a chunk.
+
+### Elasticsearch backend example
+
+```bash
+export ELASTICSEARCH_HOST=http://192.168.2.50:9200
+export ELASTICSEARCH_USER=elastic
+export ELASTICSEARCH_PASSWORD='your-password'
+```
+
+## Temporal Analysis
+
+Use `since` / `until` on `/query` to filter graph edges by provenance timestamp.
+
+```bash
+curl -X POST http://localhost:8000/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "seed_name": "APT28",
+    "depth": 2,
+    "since": "2025-01-01T00:00:00Z",
+    "until": "2025-12-31T23:59:59Z"
+  }'
+```
+
+Use `/api/timeline/entity` to see how an entity changes over time:
+
+```bash
+curl "http://localhost:8000/api/timeline/entity?entity_name=APT28&interval=month&depth=2"
+```
+
+Use `/api/timeline/threat-actors` to compare threat-actor activity over time
+(global or scoped around a seed entity):
+
+```bash
+curl "http://localhost:8000/api/timeline/threat-actors?interval=month&top_n=10&since=2025-01-01T00:00:00Z"
+```
+
+Daily threat-actor metrics are rolled up into the Elasticsearch index
+`<ELASTICSEARCH_INDEX_PREFIX>-metrics` (default: `wellspring-metrics`).
+The worker updates this on a schedule, and `/api/stats` exposes freshness and
+active-actor counts for the last 30 days.
+
+You can also trigger a manual rollup:
+
+```bash
+curl -X POST "http://localhost:8000/api/metrics/rollup?lookback_days=365&min_confidence=0.2"
+```
+
+In the web UI, use the `Since`, `Until`, and `Timeline interval` controls in Explore, then click `Visualize` to render both the filtered graph and timeline panel.

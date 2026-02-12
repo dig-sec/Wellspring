@@ -6,9 +6,9 @@ export function initOpenCTI() {
   // Load watched folder names into button label
   loadWatchedFolders();
 
-  // Poll stats every 10s
+  // Poll stats every 5s
   refreshStats();
-  setInterval(refreshStats, 10000);
+  setInterval(refreshStats, 5000);
 
   // Check for any running tasks on load
   checkTasks();
@@ -34,8 +34,50 @@ async function refreshStats() {
   try {
     const res = await fetch('/api/stats');
     const s = await res.json();
+
+    // Header stats bar (compact)
     const bar = document.getElementById('statsBar');
-    bar.textContent = `${s.entities} entities · ${s.relations} rels · ${s.runs_pending} pending · ${s.runs_running} running · ${s.runs_completed} done`;
+    const activeActors = s.metrics?.active_actors || 0;
+    const metricsFresh = s.metrics?.last_rollup_at ? 'metrics fresh' : 'metrics pending';
+    bar.textContent =
+      `${s.entities.toLocaleString()} entities · ${s.relations.toLocaleString()} rels` +
+      ` · ${activeActors.toLocaleString()} active actors (30d)` +
+      ` · ${metricsFresh}`;
+
+    // Ingestion progress bar
+    const total = s.runs_total || 1;
+    const done = s.runs_completed + s.runs_failed;
+    const pct = Math.min(100, (done / total) * 100);
+
+    const counts = document.getElementById('ingestCounts');
+    const fill = document.getElementById('ingestFill');
+    const rate = document.getElementById('ingestRate');
+    const ingestBar = document.getElementById('ingestBar');
+
+    if (s.runs_pending === 0 && s.runs_running === 0) {
+      ingestBar.classList.add('hidden');
+      return;
+    }
+    ingestBar.classList.remove('hidden');
+
+    fill.style.width = pct.toFixed(1) + '%';
+
+    counts.innerHTML =
+      `<span class="val">${done.toLocaleString()}</span>/${total.toLocaleString()} runs ` +
+      `· <span class="val">${s.runs_pending.toLocaleString()}</span> pending` +
+      (s.runs_running ? ` · <span class="val">${s.runs_running}</span> active` : '') +
+      (s.runs_failed ? ` · <span style="color:#ef4444">${s.runs_failed}</span> failed` : '');
+
+    if (s.rate_per_hour > 0) {
+      const hoursLeft = s.runs_pending / s.rate_per_hour;
+      let eta;
+      if (hoursLeft < 1) eta = `${Math.round(hoursLeft * 60)}m`;
+      else if (hoursLeft < 48) eta = `${Math.round(hoursLeft)}h`;
+      else eta = `${Math.round(hoursLeft / 24)}d`;
+      rate.innerHTML = `<span class="active">${s.rate_per_hour}/hr</span> · ETA ${eta}`;
+    } else {
+      rate.innerHTML = s.runs_running ? '<span class="active">processing…</span>' : 'idle';
+    }
   } catch (e) { /* silent */ }
 }
 

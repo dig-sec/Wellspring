@@ -77,6 +77,8 @@ class QueryRequest(BaseModel):
     depth: int = 1
     min_confidence: float = 0.0
     source_uri: Optional[str] = None
+    since: Optional[datetime] = None
+    until: Optional[datetime] = None
 
 
 class SubgraphNode(BaseModel):

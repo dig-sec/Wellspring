@@ -1,9 +1,9 @@
 from wellspring.schemas import Entity, Relation
-from wellspring.storage.sqlite_store import SQLiteGraphStore
+from tests.in_memory_graph_store import InMemoryGraphStore
 
 
 def test_relation_merge_sums_numeric_attrs():
-    store = SQLiteGraphStore(":memory:")
+    store = InMemoryGraphStore()
     subject = Entity(id="s1", name="Subject", type=None)
     obj = Entity(id="o1", name="Object", type=None)
     store.upsert_entities([subject, obj])
