@@ -38,7 +38,7 @@ export function initUpload() {
     uploadActions.style.display = 'flex';
     fileListEl.innerHTML = pendingFiles.map((f, i) => `
       <div class="file-item">
-        <span class="name">${f.name}</span>
+        <span class="name">${esc(f.name)}</span>
         <span class="size">${fmtSize(f.size)}</span>
         <button class="remove-file" data-idx="${i}">&times;</button>
       </div>
@@ -132,12 +132,16 @@ async function loadRuns() {
       el.innerHTML = '<div class="empty-state" style="padding:20px 0"><p>No runs yet</p></div>';
       return;
     }
-    el.innerHTML = runs.map(r => `
-      <div class="run-item" data-run="${r.run_id}">
-        <span class="name" title="${r.run_id}">${r.run_id.slice(0, 8)}…</span>
-        <span class="badge ${r.status}">${r.status}</span>
+    el.innerHTML = runs.map(r => {
+      const runId = String(r.run_id || '');
+      const status = normalizeStatus(r.status);
+      return `
+      <div class="run-item" data-run="${esc(runId)}">
+        <span class="name" title="${esc(runId)}">${esc(runId.slice(0, 8))}…</span>
+        <span class="badge ${escAttr(status)}">${esc(status)}</span>
       </div>
-    `).join('');
+    `;
+    }).join('');
   } catch (e) { /* silent */ }
 }
 
@@ -159,4 +163,25 @@ function pollRun(runId) {
       clearInterval(iv);
     }
   }, 3000);
+}
+
+function normalizeStatus(value) {
+  const status = String(value || '').toLowerCase();
+  if (status === 'queued' || status === 'running' || status === 'completed' || status === 'failed') {
+    return status;
+  }
+  return 'queued';
+}
+
+function esc(v) {
+  return String(v ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function escAttr(v) {
+  return String(v ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
 }

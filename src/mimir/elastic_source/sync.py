@@ -72,6 +72,8 @@ def _normalize_text(
         return ""
 
     out = html.unescape(text)
+    # Normalize non-breaking spaces from HTML entities (e.g., &nbsp;).
+    out = out.replace("\u00a0", " ")
     out = out.replace("\r\n", "\n").replace("\r", "\n")
     if strip_html and "<" in out and ">" in out:
         out = _TAG_RE.sub(" ", out)

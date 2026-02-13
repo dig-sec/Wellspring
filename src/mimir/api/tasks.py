@@ -35,11 +35,33 @@ class BackgroundTask:
 class TaskManager:
     """Simple in-memory task tracker for background jobs."""
 
-    def __init__(self):
+    def __init__(self, max_history: int = 500):
         self._tasks: Dict[str, BackgroundTask] = {}
         self._running: Dict[str, asyncio.Task] = {}
+        self._max_history = max(50, max_history)
+
+    def _prune(self) -> None:
+        # Drop completed coroutine handles.
+        for task_id, task in list(self._running.items()):
+            if task.done():
+                self._running.pop(task_id, None)
+
+        # Keep bounded history for finished tasks.
+        if len(self._tasks) <= self._max_history:
+            return
+
+        removable = [
+            t
+            for t in self._tasks.values()
+            if t.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}
+        ]
+        removable.sort(key=lambda t: t.started_at or "")
+        while len(self._tasks) > self._max_history and removable:
+            victim = removable.pop(0)
+            self._tasks.pop(victim.id, None)
 
     def create(self, kind: str, detail: Optional[Dict] = None) -> BackgroundTask:
+        self._prune()
         task = BackgroundTask(
             id=str(uuid4())[:8],
             kind=kind,
@@ -54,6 +76,7 @@ class TaskManager:
         return self._tasks.get(task_id)
 
     def list_all(self) -> List[BackgroundTask]:
+        self._prune()
         return list(self._tasks.values())
 
     def update(self, task_id: str, **kwargs):
@@ -78,6 +101,9 @@ class TaskManager:
                     error=str(exc),
                     finished_at=datetime.utcnow().isoformat(),
                 )
+            finally:
+                self._running.pop(task_id, None)
+                self._prune()
 
         asyncio.create_task(_wrapper())
 

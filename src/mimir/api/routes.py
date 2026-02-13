@@ -146,7 +146,7 @@ def root(request: Request) -> str:
 
 @router.get("/api/search")
 def search_entities(
-    q: str = Query(..., min_length=1),
+    q: str = Query(..., min_length=1, max_length=settings.search_query_max_length),
     entity_type: Optional[str] = Query(default=None),
 ):
     """Search for entities by name."""
@@ -181,9 +181,21 @@ def _is_stix_bundle(raw: bytes) -> bool:
 async def upload_documents(files: List[UploadFile] = File(...)):
     """Upload documents (text, PDF, or STIX 2.1 JSON) for ingestion."""
     results = []
+    max_upload_bytes = settings.max_document_size_mb * 1024 * 1024
     for f in files:
-        raw = await f.read()
+        raw = await f.read(max_upload_bytes + 1)
         filename = f.filename or ""
+        if len(raw) > max_upload_bytes:
+            results.append(
+                {
+                    "filename": filename,
+                    "status": "error",
+                    "error": (
+                        f"File exceeds {settings.max_document_size_mb}MB upload limit"
+                    ),
+                }
+            )
+            continue
 
         # ── STIX bundle fast-path: structured import, no LLM needed ──
         if filename.lower().endswith(".json") and _is_stix_bundle(raw):
@@ -441,6 +453,20 @@ def delete_all_runs():
 
 @router.post("/ingest", response_model=IngestResponse)
 def ingest(payload: IngestRequest) -> IngestResponse:
+    if len(payload.text) > settings.max_total_chars_per_run:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"text exceeds {settings.max_total_chars_per_run} character limit"
+            ),
+        )
+    payload_bytes = len(payload.text.encode("utf-8"))
+    if payload_bytes > settings.max_document_size_mb * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=f"text exceeds {settings.max_document_size_mb}MB size limit",
+        )
+
     run_id = str(uuid4())
     run = ExtractionRun(
         run_id=run_id,
@@ -1343,6 +1369,11 @@ async def pull_all_sources(
             for i, filepath in enumerate(files):
                 fname = os.path.basename(filepath)
                 try:
+                    if os.path.getsize(filepath) > settings.max_document_size_mb * 1024 * 1024:
+                        scan_errors.append(
+                            f"{fname}: exceeds {settings.max_document_size_mb}MB limit"
+                        )
+                        continue
                     with open(filepath, "rb") as f:
                         raw = f.read()
                     if len(raw) < 10:
@@ -1541,6 +1572,11 @@ async def scan_directory(
             processed += 1
             fname = os.path.basename(filepath)
             try:
+                if os.path.getsize(filepath) > settings.max_document_size_mb * 1024 * 1024:
+                    errors.append(
+                        f"{fname}: exceeds {settings.max_document_size_mb}MB limit"
+                    )
+                    continue
                 with open(filepath, "rb") as f:
                     raw = f.read()
 
@@ -2065,7 +2101,14 @@ def get_watched_folders():
     for d in dirs:
         root = pathlib.Path(d)
         count = sum(1 for _ in root.rglob("*") if _.is_file()) if root.is_dir() else 0
-        result.append({"path": d, "exists": root.is_dir(), "file_count": count})
+        item = {
+            "name": root.name or str(root),
+            "exists": root.is_dir(),
+            "file_count": count,
+        }
+        if settings.expose_local_paths:
+            item["path"] = d
+        result.append(item)
     return result
 
 
@@ -2171,6 +2214,8 @@ async def ask_question(request: Request):
     question = (body.get("question") or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
+    if len(question) > 4000:
+        raise HTTPException(status_code=413, detail="question exceeds 4000 characters")
 
     # ── 1. Gather context from the knowledge graph ──────────────
     context: Dict = {"entities": [], "relations": [], "provenance": [], "stats": None}

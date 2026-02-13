@@ -65,6 +65,15 @@ function edgeColor(predicate) {
   return PREDICATE_COLORS[p] || '#9ca3af';
 }
 
+function escHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function readDateInput(id) {
   const el = document.getElementById(id);
   if (!el || !el.value) return null;
@@ -1103,7 +1112,8 @@ function buildGraphLegend(data) {
   legend.style.display = 'flex';
   legend.innerHTML = types.map(([t, c]) => {
     const color = TYPE_COLORS[t] || '#9ca3af';
-    return `<span class="legend-item"><span class="legend-dot" style="background:${color}"></span>${t.replace(/_/g, ' ')} ${c}</span>`;
+    const label = escHtml(t.replace(/_/g, ' '));
+    return `<span class="legend-item"><span class="legend-dot" style="background:${color}"></span>${label} ${c}</span>`;
   }).join('');
 }
 

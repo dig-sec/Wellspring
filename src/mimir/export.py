@@ -11,6 +11,16 @@ from typing import Any, Dict, List
 
 from .schemas import Subgraph, SubgraphNode
 
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: Any) -> str:
+    text = str(value or "")
+    if text.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + text
+    return text
+
+
 # ── CSV (two CSVs in a ZIP) ──────────────────────────────────────────────
 
 
@@ -23,7 +33,7 @@ def export_csv_zip(subgraph: Subgraph) -> bytes:
         ew = csv.writer(ent_io)
         ew.writerow(["id", "name", "type"])
         for n in sorted(subgraph.nodes, key=lambda n: n.name.lower()):
-            ew.writerow([n.id, n.name, n.type or ""])
+            ew.writerow([_csv_safe(n.id), _csv_safe(n.name), _csv_safe(n.type or "")])
         zf.writestr("entities.csv", ent_io.getvalue())
 
         # relations.csv
@@ -44,12 +54,12 @@ def export_csv_zip(subgraph: Subgraph) -> bytes:
         for e in sorted(subgraph.edges, key=lambda e: e.predicate):
             rw.writerow(
                 [
-                    e.id,
-                    e.subject_id,
-                    name_map.get(e.subject_id, e.subject_id),
-                    e.predicate,
-                    e.object_id,
-                    name_map.get(e.object_id, e.object_id),
+                    _csv_safe(e.id),
+                    _csv_safe(e.subject_id),
+                    _csv_safe(name_map.get(e.subject_id, e.subject_id)),
+                    _csv_safe(e.predicate),
+                    _csv_safe(e.object_id),
+                    _csv_safe(name_map.get(e.object_id, e.object_id)),
                     f"{e.confidence:.2f}",
                 ]
             )

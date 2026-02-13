@@ -100,12 +100,12 @@ export function initSearch(onVisualize) {
         return;
       }
       entityList.innerHTML = data.map(e => `
-        <div class="entity-card" data-id="${e.id}" data-name="${e.name}">
-          <span class="entity-dot t-${e.type || 'unknown'}"></span>
+        <div class="entity-card" data-id="${esc(e.id)}" data-name="${esc(e.name)}">
+          <span class="entity-dot t-${escAttr(e.type || 'unknown')}"></span>
           <div class="entity-info">
-            <div class="entity-name">${e.name}</div>
-            <div class="entity-type">${e.type || ''}</div>
-            <div class="entity-id">${e.id}</div>
+            <div class="entity-name">${esc(e.name)}</div>
+            <div class="entity-type">${esc(e.type || '')}</div>
+            <div class="entity-id">${esc(e.id)}</div>
           </div>
         </div>
       `).join('');
@@ -155,4 +155,17 @@ function _toIsoDateTime(value) {
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return null;
   return dt.toISOString();
+}
+
+function esc(v) {
+  return String(v ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function escAttr(v) {
+  return String(v ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
 }

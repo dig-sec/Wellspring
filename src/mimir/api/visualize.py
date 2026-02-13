@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 from typing import Optional
 
@@ -22,13 +23,15 @@ def render_html(subgraph: Subgraph, title: Optional[str] = None) -> str:
         ],
     }
     title = title or "Mimir Graph"
-    data_json = json.dumps(payload)
+    safe_title = html.escape(title, quote=True)
+    # Prevent embedded `</script>` from terminating the inline script block.
+    data_json = json.dumps(payload).replace("</", "<\\/")
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{title}</title>
+  <title>{safe_title}</title>
   <style>
     :root {{
       --bg: #f4f2ec;
@@ -93,7 +96,7 @@ def render_html(subgraph: Subgraph, title: Optional[str] = None) -> str:
 </head>
 <body>
   <header>
-    <h1>{title}</h1>
+    <h1>{safe_title}</h1>
     <p>Drag nodes to explore. Zoom with scroll.</p>
   </header>
   <svg id="graph"></svg>

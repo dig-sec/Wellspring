@@ -635,24 +635,48 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
         if not query:
             return []
 
+        normalized_query = query.strip()
+        wildcard_value = (
+            normalized_query.replace("\\", "\\\\")
+            .replace("*", "\\*")
+            .replace("?", "\\?")
+            + "*"
+        )
         bool_query: Dict[str, Any] = {
-            "must": [
+            "should": [
+                {
+                    "match_phrase_prefix": {
+                        "name": {
+                            "query": normalized_query,
+                            "max_expansions": 20,
+                        }
+                    }
+                },
                 {
                     "wildcard": {
                         "name.keyword": {
-                            "value": f"*{query}*",
+                            "value": wildcard_value,
                             "case_insensitive": True,
                         }
                     }
-                }
+                },
+                {
+                    "match": {
+                        "name": {
+                            "query": normalized_query,
+                            "operator": "and",
+                        }
+                    }
+                },
             ]
         }
+        bool_query["minimum_should_match"] = 1
         if entity_type:
             bool_query["filter"] = [{"term": {"type": entity_type}}]
         response = self.client.search(
             index=self.indices.entities,
             query={"bool": bool_query},
-            size=100,
+            size=50,
         )
         hits = response.get("hits", {}).get("hits", [])
         return [self._to_entity(hit["_id"], hit["_source"]) for hit in hits]

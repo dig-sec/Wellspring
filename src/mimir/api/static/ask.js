@@ -2,7 +2,8 @@ import { toast, apiFetch, apiUrl } from './helpers.js';
 
 /* ── entity-type dot color class ────────── */
 function typeClass(t) {
-  return 't-' + (t || 'unknown');
+  const type = String(t || 'unknown');
+  return 't-' + type.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 /* ── markdown-lite renderer ─────────────── */
@@ -189,10 +190,13 @@ export function initAsk() {
       return;
     }
 
+    const entitiesFound = safeNumber(event.entities_found);
+    const relationsFound = safeNumber(event.relations_found);
+    const provenanceFound = safeNumber(event.provenance_found);
     let html = '<div class="ask-source-summary">';
-    html += `<span class="ask-source-stat">🔍 ${event.entities_found} entities</span>`;
-    html += `<span class="ask-source-stat">🔗 ${event.relations_found} relations</span>`;
-    html += `<span class="ask-source-stat">📄 ${event.provenance_found} sources</span>`;
+    html += `<span class="ask-source-stat">🔍 ${entitiesFound} entities</span>`;
+    html += `<span class="ask-source-stat">🔗 ${relationsFound} relations</span>`;
+    html += `<span class="ask-source-stat">📄 ${provenanceFound} sources</span>`;
     html += '</div>';
 
     if (event.entities && event.entities.length) {
@@ -200,8 +204,8 @@ export function initAsk() {
       for (const e of event.entities.slice(0, 8)) {
         html += `<span class="ask-entity-chip"><span class="entity-dot ${typeClass(e.type)}"></span>${esc(e.name)}<span class="ask-chip-type">${esc(e.type || '')}</span></span>`;
       }
-      if (event.entities_found > 8) {
-        html += `<span class="ask-entity-chip ask-chip-more">+${event.entities_found - 8} more</span>`;
+      if (entitiesFound > 8) {
+        html += `<span class="ask-entity-chip ask-chip-more">+${entitiesFound - 8} more</span>`;
       }
       html += '</div>';
     }
@@ -213,4 +217,9 @@ export function initAsk() {
   function scrollToBottom() {
     messages.scrollTop = messages.scrollHeight;
   }
+}
+
+function safeNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }

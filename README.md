@@ -68,6 +68,10 @@ Environment variables:
 - `LOG_LEVEL` (default: `INFO`)
 - `MIMIR_API_BASE_URL` (default: empty; optional absolute API base URL for UI fetches)
   - Backward compatible fallback: `WELLSPRING_API_BASE_URL`
+- `MIMIR_API_TOKEN` (default: empty; bearer token for API access)
+- `MIMIR_ALLOW_LOCALHOST_WITHOUT_TOKEN` (default: `1`; allow unauthenticated localhost requests when no token is set)
+- `MIMIR_EXPOSE_LOCAL_PATHS` (default: `0`; expose absolute watched-folder paths in API responses)
+- `SEARCH_QUERY_MAX_LENGTH` (default: `120`; max `/api/search` query length)
 - `QUERY_MAX_NODES` (default: `400`; soft cap for `/query` and `/visualize`, `0` disables)
 - `QUERY_MAX_EDGES` (default: `1200`; soft cap for `/query` and `/visualize`, `0` disables)
 - `ENABLE_COOCCURRENCE` (default: `0`)

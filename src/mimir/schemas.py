@@ -77,7 +77,7 @@ class IngestResponse(BaseModel):
 class QueryRequest(BaseModel):
     seed_id: Optional[str] = None
     seed_name: Optional[str] = None
-    depth: int = 1
+    depth: int = Field(default=1, ge=0, le=5)
     min_confidence: float = 0.0
     max_nodes: Optional[int] = Field(default=None, ge=0)
     max_edges: Optional[int] = Field(default=None, ge=0)

@@ -29,6 +29,12 @@ class Settings:
         "MIMIR_API_BASE_URL",
         os.getenv("WELLSPRING_API_BASE_URL", ""),
     )
+    api_token: str = os.getenv("MIMIR_API_TOKEN", "")
+    allow_localhost_without_token: bool = _env_bool(
+        "MIMIR_ALLOW_LOCALHOST_WITHOUT_TOKEN", "1"
+    )
+    expose_local_paths: bool = _env_bool("MIMIR_EXPOSE_LOCAL_PATHS", "0")
+    search_query_max_length: int = int(os.getenv("SEARCH_QUERY_MAX_LENGTH", "120"))
     query_max_nodes: int = int(os.getenv("QUERY_MAX_NODES", "400"))
     query_max_edges: int = int(os.getenv("QUERY_MAX_EDGES", "1200"))
     enable_cooccurrence: bool = os.getenv("ENABLE_COOCCURRENCE", "0") == "1"
@@ -315,6 +321,12 @@ def validate_settings(settings: Settings) -> None:
         raise ValueError(
             f"ES_RETRY_INITIAL_DELAY_SECONDS must be > 0, "
             f"got {settings.es_retry_initial_delay_seconds}"
+        )
+
+    if settings.search_query_max_length < 8:
+        raise ValueError(
+            "SEARCH_QUERY_MAX_LENGTH must be >= 8, "
+            f"got {settings.search_query_max_length}"
         )
 
     # Log resolved settings for debugging
