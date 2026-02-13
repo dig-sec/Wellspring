@@ -1463,7 +1463,22 @@ class ElasticRunStore(_ElasticBase, RunStore):
 
 class ElasticMetricsStore(_ElasticBase, MetricsStore):
     METRIC_TYPE_DAILY_THREAT_ACTOR = "daily_threat_actor"
+    METRIC_TYPE_DAILY_PIR_ENTITY = "daily_pir_entity"
     GLOBAL_SCOPE = "__all__"
+    PIR_ENTITY_TYPES = (
+        "malware",
+        "vulnerability",
+        "threat_actor",
+        "attack_pattern",
+        "infrastructure",
+    )
+    PIR_QUESTIONS = {
+        "malware": "What malware families are trending?",
+        "vulnerability": "Which CVEs / vulnerabilities are trending?",
+        "threat_actor": "Which threat actors are trending?",
+        "attack_pattern": "Which ATT&CK techniques are trending?",
+        "infrastructure": "What infrastructure is being targeted?",
+    }
 
     def __init__(
         self,
@@ -1485,6 +1500,7 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
                 "bucket_start": {"type": "date"},
                 "entity_id": {"type": "keyword"},
                 "entity_name": {"type": "keyword"},
+                "entity_type": {"type": "keyword"},
                 "relation_count": {"type": "integer"},
                 "incoming_relation_count": {"type": "integer"},
                 "outgoing_relation_count": {"type": "integer"},
@@ -1504,6 +1520,44 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
 
     def _source_scope(self, source_uri: Optional[str]) -> str:
         return source_uri or self.GLOBAL_SCOPE
+
+    @staticmethod
+    def _daily_window_bounds(
+        *,
+        days: int,
+        since: Optional[datetime],
+        until: Optional[datetime],
+    ) -> Tuple[int, datetime, datetime]:
+        now = datetime.now(timezone.utc)
+        if since and until:
+            current_since = (
+                since if since.tzinfo is not None else since.replace(tzinfo=timezone.utc)
+            ).astimezone(timezone.utc)
+            current_until = (
+                until if until.tzinfo is not None else until.replace(tzinfo=timezone.utc)
+            ).astimezone(timezone.utc)
+            if current_since >= current_until:
+                current_since = current_until - timedelta(days=1)
+            duration_seconds = max(
+                int((current_until - current_since).total_seconds()),
+                1,
+            )
+            window_days = max(1, (duration_seconds + 86399) // 86400)
+            return window_days, current_since, current_until
+
+        window_days = max(1, int(days))
+        current_until = now
+        current_since = now - timedelta(days=window_days)
+        return window_days, current_since, current_until
+
+    @staticmethod
+    def _iter_day_starts(start: datetime, end: datetime) -> List[datetime]:
+        cursor = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        out: List[datetime] = []
+        while cursor < end:
+            out.append(cursor)
+            cursor += timedelta(days=1)
+        return out
 
     def rollup_daily_threat_actor_stats(
         self,
@@ -1712,6 +1766,389 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
             "first_bucket": first_bucket.isoformat() if first_bucket else None,
             "last_bucket": last_bucket.isoformat() if last_bucket else None,
             "generated_at": generated_at,
+        }
+
+    def rollup_daily_pir_stats(
+        self,
+        lookback_days: int = 365,
+        min_confidence: float = 0.0,
+        source_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        lookback_days = max(int(lookback_days), 1)
+        min_confidence = max(0.0, min(1.0, float(min_confidence)))
+
+        now = datetime.utcnow()
+        since = now - timedelta(days=lookback_days)
+        scope = self._source_scope(source_uri)
+
+        entity_hits = list(
+            self._iter_search_hits(
+                self.indices.entities,
+                query={"terms": {"type": list(self.PIR_ENTITY_TYPES)}},
+                sort=[{"_id": "asc"}],
+            )
+        )
+        entity_meta = {
+            hit["_id"]: {
+                "name": str(hit["_source"].get("name") or hit["_id"]),
+                "type": str(hit["_source"].get("type") or "unknown"),
+            }
+            for hit in entity_hits
+        }
+        entity_ids = set(entity_meta.keys())
+        if not entity_ids:
+            return {
+                "metric_type": self.METRIC_TYPE_DAILY_PIR_ENTITY,
+                "source_scope": scope,
+                "lookback_days": lookback_days,
+                "min_confidence": min_confidence,
+                "entities_total": 0,
+                "relations_considered": 0,
+                "buckets_written": 0,
+                "docs_written": 0,
+                "first_bucket": None,
+                "last_bucket": None,
+                "generated_at": now.isoformat(),
+            }
+
+        relation_meta: Dict[str, Dict[str, Any]] = {}
+        entity_id_list = sorted(entity_ids)
+        chunk_size = 500
+        for i in range(0, len(entity_id_list), chunk_size):
+            entity_chunk = entity_id_list[i : i + chunk_size]
+            relation_query: Dict[str, Any] = {
+                "bool": {
+                    "should": [
+                        {"terms": {"subject_id": entity_chunk}},
+                        {"terms": {"object_id": entity_chunk}},
+                    ],
+                    "minimum_should_match": 1,
+                    "filter": [{"range": {"confidence": {"gte": min_confidence}}}],
+                }
+            }
+            for hit in self._iter_search_hits(
+                self.indices.relations,
+                query=relation_query,
+                sort=[{"_id": "asc"}],
+            ):
+                relation_id = hit["_id"]
+                source = hit["_source"]
+                subject_id = source.get("subject_id")
+                object_id = source.get("object_id")
+                predicate = source.get("predicate", "related_to")
+                candidate_entity_ids: List[str] = []
+                subject_meta = entity_meta.get(str(subject_id))
+                object_meta = entity_meta.get(str(object_id))
+                if subject_meta:
+                    candidate_entity_ids.append(str(subject_id))
+                if object_meta and str(object_id) != str(subject_id):
+                    candidate_entity_ids.append(str(object_id))
+                if not candidate_entity_ids:
+                    continue
+                relation_meta[relation_id] = {
+                    "predicate": predicate,
+                    "entity_ids": candidate_entity_ids,
+                }
+
+        if not relation_meta:
+            return {
+                "metric_type": self.METRIC_TYPE_DAILY_PIR_ENTITY,
+                "source_scope": scope,
+                "lookback_days": lookback_days,
+                "min_confidence": min_confidence,
+                "entities_total": len(entity_ids),
+                "relations_considered": 0,
+                "buckets_written": 0,
+                "docs_written": 0,
+                "first_bucket": None,
+                "last_bucket": None,
+                "generated_at": now.isoformat(),
+            }
+
+        self.client.delete_by_query(
+            index=self.indices.metrics,
+            query={
+                "bool": {
+                    "filter": [
+                        {"term": {"metric_type": self.METRIC_TYPE_DAILY_PIR_ENTITY}},
+                        {"term": {"source_scope": scope}},
+                        {"range": {"bucket_start": {"gte": since.isoformat()}}},
+                    ]
+                }
+            },
+            refresh=False,
+            conflicts="proceed",
+        )
+
+        buckets: Dict[Tuple[str, datetime], Dict[str, Any]] = {}
+        relation_ids = sorted(relation_meta.keys())
+        relation_chunk_size = 500
+
+        for i in range(0, len(relation_ids), relation_chunk_size):
+            relation_chunk = relation_ids[i : i + relation_chunk_size]
+            filters: List[Dict[str, Any]] = [
+                {"terms": {"relation_id": relation_chunk}},
+                {"range": {"timestamp": {"gte": since.isoformat()}}},
+            ]
+            if source_uri:
+                filters.append({"term": {"source_uri": source_uri}})
+            query = {"bool": {"filter": filters}}
+            for hit in self._iter_search_hits(
+                self.indices.relation_provenance,
+                query=query,
+                sort=[{"timestamp": "asc"}, {"_id": "asc"}],
+                size=1000,
+            ):
+                source = hit["_source"]
+                relation_id = str(source.get("relation_id"))
+                relation = relation_meta.get(relation_id)
+                if not relation:
+                    continue
+                ts = _parse_datetime(source.get("timestamp"))
+                bucket_day = self._bucket_day(ts)
+                for entity_id in relation["entity_ids"]:
+                    key = (entity_id, bucket_day)
+                    if key not in buckets:
+                        buckets[key] = {
+                            "relation_ids": set(),
+                            "evidence_count": 0,
+                            "predicates": Counter(),
+                        }
+                    data = buckets[key]
+                    data["relation_ids"].add(relation_id)
+                    data["evidence_count"] += 1
+                    data["predicates"][relation["predicate"]] += 1
+
+        docs_written = 0
+        generated_at = now.isoformat()
+        first_bucket: Optional[datetime] = None
+        last_bucket: Optional[datetime] = None
+
+        for (entity_id, bucket_day), data in buckets.items():
+            if first_bucket is None or bucket_day < first_bucket:
+                first_bucket = bucket_day
+            if last_bucket is None or bucket_day > last_bucket:
+                last_bucket = bucket_day
+
+            meta = entity_meta.get(entity_id, {"name": entity_id, "type": "unknown"})
+            top_predicates = [
+                {"predicate": pred, "count": count}
+                for pred, count in data["predicates"].most_common(10)
+            ]
+            doc_id = (
+                f"{self.METRIC_TYPE_DAILY_PIR_ENTITY}:"
+                f"{scope}:{bucket_day.date().isoformat()}:{entity_id}"
+            )
+            self.client.index(
+                index=self.indices.metrics,
+                id=doc_id,
+                document={
+                    "metric_type": self.METRIC_TYPE_DAILY_PIR_ENTITY,
+                    "source_scope": scope,
+                    "bucket_start": bucket_day.isoformat(),
+                    "entity_id": entity_id,
+                    "entity_name": meta["name"],
+                    "entity_type": meta["type"],
+                    "relation_count": len(data["relation_ids"]),
+                    "evidence_count": int(data["evidence_count"]),
+                    "top_predicates": top_predicates,
+                    "lookback_days": lookback_days,
+                    "min_confidence": min_confidence,
+                    "rollup_generated_at": generated_at,
+                },
+                refresh=False,
+            )
+            docs_written += 1
+
+        self.client.indices.refresh(index=self.indices.metrics)
+
+        return {
+            "metric_type": self.METRIC_TYPE_DAILY_PIR_ENTITY,
+            "source_scope": scope,
+            "lookback_days": lookback_days,
+            "min_confidence": min_confidence,
+            "entities_total": len(entity_ids),
+            "relations_considered": len(relation_meta),
+            "buckets_written": len(buckets),
+            "docs_written": docs_written,
+            "first_bucket": first_bucket.isoformat() if first_bucket else None,
+            "last_bucket": last_bucket.isoformat() if last_bucket else None,
+            "generated_at": generated_at,
+        }
+
+    def get_pir_trending_summary(
+        self,
+        *,
+        days: int = 7,
+        top_n: int = 10,
+        source_uri: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        top_n = max(1, min(int(top_n), 50))
+        window_days, current_since, current_until = self._daily_window_bounds(
+            days=days,
+            since=since,
+            until=until,
+        )
+        previous_since = current_since - timedelta(days=window_days)
+        scope = self._source_scope(source_uri)
+
+        filters: List[Dict[str, Any]] = [
+            {"term": {"metric_type": self.METRIC_TYPE_DAILY_PIR_ENTITY}},
+            {"term": {"source_scope": scope}},
+            {"range": {"bucket_start": {"gte": previous_since.isoformat()}}},
+            {"range": {"bucket_start": {"lt": current_until.isoformat()}}},
+        ]
+        docs = list(
+            self._iter_search_hits(
+                self.indices.metrics,
+                query={"bool": {"filter": filters}},
+                sort=[
+                    {"bucket_start": "asc"},
+                    {"_id": "asc"},
+                ],
+                size=1000,
+            )
+        )
+
+        aggregated: Dict[str, Dict[str, Dict[str, Any]]] = {
+            entity_type: {} for entity_type in self.PIR_ENTITY_TYPES
+        }
+        rollup_generated_at: Optional[str] = None
+
+        for hit in docs:
+            source = hit.get("_source") or {}
+            entity_type = str(source.get("entity_type") or "")
+            if entity_type not in aggregated:
+                continue
+            entity_id = str(source.get("entity_id") or "")
+            if not entity_id:
+                continue
+            entity = aggregated[entity_type].setdefault(
+                entity_id,
+                {
+                    "entity_id": entity_id,
+                    "name": str(source.get("entity_name") or entity_id),
+                    "type": entity_type,
+                    "current_evidence": 0,
+                    "previous_evidence": 0,
+                    "relation_count_current": 0,
+                    "predicate_counts": Counter(),
+                    "history_counts": Counter(),
+                },
+            )
+
+            ts = _parse_datetime(source.get("bucket_start"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            else:
+                ts = ts.astimezone(timezone.utc)
+
+            evidence_count = int(source.get("evidence_count", 0))
+            relation_count = int(source.get("relation_count", 0))
+            top_predicates = source.get("top_predicates") or []
+
+            if previous_since <= ts < current_since:
+                entity["previous_evidence"] = int(entity["previous_evidence"]) + evidence_count
+            if current_since <= ts < current_until:
+                entity["current_evidence"] = int(entity["current_evidence"]) + evidence_count
+                entity["relation_count_current"] = (
+                    int(entity["relation_count_current"]) + relation_count
+                )
+                bucket_key = ts.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ).isoformat()
+                entity["history_counts"][bucket_key] += evidence_count
+                for predicate_item in top_predicates:
+                    predicate = str(predicate_item.get("predicate") or "")
+                    if not predicate:
+                        continue
+                    entity["predicate_counts"][predicate] += int(
+                        predicate_item.get("count", 0)
+                    )
+
+            generated_at = source.get("rollup_generated_at")
+            if generated_at and (
+                not rollup_generated_at or str(generated_at) > str(rollup_generated_at)
+            ):
+                rollup_generated_at = str(generated_at)
+
+        current_buckets = self._iter_day_starts(current_since, current_until)
+        current_bucket_keys = [bucket.isoformat() for bucket in current_buckets]
+
+        def _build_question(entity_type: str, question: str) -> Dict[str, Any]:
+            items = []
+            for entity in aggregated.get(entity_type, {}).values():
+                current_evidence = int(entity["current_evidence"])
+                if current_evidence <= 0:
+                    continue
+                previous_evidence = int(entity["previous_evidence"])
+                delta = current_evidence - previous_evidence
+                trend_score = delta / max(previous_evidence, 1)
+                top_predicates = [
+                    {"predicate": pred, "count": count}
+                    for pred, count in entity["predicate_counts"].most_common(5)
+                ]
+                history = [
+                    {
+                        "bucket_start": key,
+                        "evidence_count": int(entity["history_counts"].get(key, 0)),
+                    }
+                    for key in current_bucket_keys
+                ]
+                items.append(
+                    {
+                        "entity_id": entity["entity_id"],
+                        "name": entity["name"],
+                        "type": entity["type"],
+                        "current_evidence": current_evidence,
+                        "previous_evidence": previous_evidence,
+                        "delta_evidence": delta,
+                        "trend_score": trend_score,
+                        "relation_count_current": int(entity["relation_count_current"]),
+                        "top_predicates": top_predicates,
+                        "history": history,
+                    }
+                )
+
+            items.sort(
+                key=lambda item: (
+                    -int(item["delta_evidence"]),
+                    -int(item["current_evidence"]),
+                    str(item["name"]).lower(),
+                )
+            )
+            items = items[:top_n]
+
+            return {
+                "id": f"{entity_type}_trending",
+                "question": question,
+                "entity_type": entity_type,
+                "item_count": len(items),
+                "items": items,
+            }
+
+        generated_at = datetime.now(timezone.utc).isoformat()
+        return {
+            "generated_at": generated_at,
+            "rollup_last_generated_at": rollup_generated_at,
+            "source_uri": source_uri,
+            "source_scope": scope,
+            "window": {
+                "days": window_days,
+                "since": current_since.isoformat(),
+                "until": current_until.isoformat(),
+            },
+            "compare_window": {
+                "days": window_days,
+                "since": previous_since.isoformat(),
+                "until": current_since.isoformat(),
+            },
+            "questions": [
+                _build_question(entity_type, question)
+                for entity_type, question in self.PIR_QUESTIONS.items()
+            ],
         }
 
     def get_rollup_overview(

@@ -79,6 +79,8 @@ class QueryRequest(BaseModel):
     seed_name: Optional[str] = None
     depth: int = 1
     min_confidence: float = 0.0
+    max_nodes: Optional[int] = Field(default=None, ge=0)
+    max_edges: Optional[int] = Field(default=None, ge=0)
     source_uri: Optional[str] = None
     since: Optional[datetime] = None
     until: Optional[datetime] = None

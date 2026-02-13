@@ -11,6 +11,20 @@ let selectMode = false;
 const selected = { nodes: new Set(), edges: new Set() };
 let timelineData = null;
 let lastGraphQuery = null;
+const hiddenTypes = new Set();
+let fullGraphData = null;
+let linkSel = null;
+let nodeSel = null;
+let edgeLabelSel = null;
+const GRAPH_REQUEST_LIMITS = {
+  maxNodes: 400,
+  maxEdges: 1200,
+};
+const GRAPH_RENDER_LIMITS = {
+  nodeLabelsMax: 220,
+  edgeLabelsMax: 320,
+  denseNodeLabelCount: 40,
+};
 
 /* entity type → color */
 const TYPE_COLORS = {
@@ -27,6 +41,29 @@ const TYPE_COLORS = {
   identity: '#0ea5e9',
 };
 function nodeColor(d) { return TYPE_COLORS[d.type] || '#9ca3af'; }
+
+/* edge predicate → color */
+const PREDICATE_COLORS = {
+  uses: '#3b82f6',
+  'attributed-to': '#f97316',
+  targets: '#ef4444',
+  'indicates': '#14b8a6',
+  'related-to': '#9ca3af',
+  mitigates: '#22c55e',
+  'variant-of': '#a855f7',
+  'derived-from': '#6366f1',
+  employs: '#3b82f6',
+  exploits: '#eab308',
+  delivers: '#ec4899',
+  drops: '#ec4899',
+  communicates_with: '#0ea5e9',
+  hosts: '#6366f1',
+};
+function edgeColor(predicate) {
+  if (!predicate) return '#9ca3af';
+  const p = predicate.toLowerCase().replace(/\s+/g, '-');
+  return PREDICATE_COLORS[p] || '#9ca3af';
+}
 
 function readDateInput(id) {
   const el = document.getElementById(id);
@@ -53,6 +90,107 @@ function currentTimelineInterval() {
   return select?.value || 'month';
 }
 
+function readIntHeader(headers, name, fallbackValue) {
+  const raw = headers.get(name);
+  const value = Number.parseInt(raw || '', 10);
+  return Number.isFinite(value) ? value : fallbackValue;
+}
+
+function suggestedEntityCleanValue() {
+  const entityId = document.getElementById('entityIdInput')?.value?.trim() || '';
+  if (entityId) return entityId;
+  const entityName = document.getElementById('searchInput')?.value?.trim() || '';
+  if (entityName) return entityName;
+  const entityType = document.getElementById('entityTypeInput')?.value?.trim() || '';
+  if (entityType) return `type:${entityType}`;
+  return '';
+}
+
+function parseEntityCleanSpec(rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value) return null;
+  if (value.toLowerCase().startsWith('type:')) {
+    const entityType = value.slice(5).trim().toLowerCase();
+    if (!entityType) return null;
+    return { mode: 'type', value: entityType, label: `type:${entityType}` };
+  }
+  return { mode: 'entity', value, valueLower: value.toLowerCase(), label: value };
+}
+
+function collectNodeIdsForCleanup(spec) {
+  const idsToRemove = new Set();
+  if (!graphData) return idsToRemove;
+
+  if (spec.mode === 'type') {
+    graphData.nodes.forEach(node => {
+      if ((node.type || '').toLowerCase() === spec.value) idsToRemove.add(node.id);
+    });
+    return idsToRemove;
+  }
+
+  graphData.nodes.forEach(node => {
+    if (node.id === spec.value || (node.name || '') === spec.value) idsToRemove.add(node.id);
+  });
+  if (idsToRemove.size) return idsToRemove;
+
+  graphData.nodes.forEach(node => {
+    const nodeId = (node.id || '').toLowerCase();
+    const nodeName = (node.name || '').toLowerCase();
+    if (nodeId.includes(spec.valueLower) || nodeName.includes(spec.valueLower)) {
+      idsToRemove.add(node.id);
+    }
+  });
+
+  return idsToRemove;
+}
+
+function quickCleanByEntity() {
+  if (!graphData || !graphData.nodes.length) {
+    toast('Load a graph first', 'error');
+    return;
+  }
+
+  const input = window.prompt(
+    'Clean graph by entity. Use entity ID/name, or type:<entity_type> (example: type:indicator).',
+    suggestedEntityCleanValue(),
+  );
+  if (input === null) return;
+
+  const spec = parseEntityCleanSpec(input);
+  if (!spec) {
+    toast('Enter an entity ID/name or type:<entity_type>', 'error');
+    return;
+  }
+
+  const idsToRemove = collectNodeIdsForCleanup(spec);
+  if (!idsToRemove.size) {
+    toast(`No nodes matched "${spec.label}"`, 'error');
+    return;
+  }
+
+  const nBefore = graphData.nodes.length;
+  const eBefore = graphData.edges.length;
+  const cleaned = {
+    nodes: graphData.nodes.filter(node => !idsToRemove.has(node.id)),
+    edges: graphData.edges.filter(
+      edge => !idsToRemove.has(edge.subject_id) && !idsToRemove.has(edge.object_id),
+    ),
+  };
+  const nRemoved = nBefore - cleaned.nodes.length;
+  const eRemoved = eBefore - cleaned.edges.length;
+  graphData = cleaned;
+
+  if (!graphData.nodes.length) {
+    clearGraph();
+  } else {
+    renderGraph(graphData);
+  }
+  toast(
+    `Cleaned ${nRemoved} node(s), ${eRemoved} edge(s) by "${spec.label}"`,
+    'success',
+  );
+}
+
 export function initGraph(getConfidence) {
   getConf = getConfidence;
 
@@ -64,7 +202,11 @@ export function initGraph(getConfidence) {
   });
   document.getElementById('fitBtn').addEventListener('click', fitToView);
   document.getElementById('pinBtn').addEventListener('click', togglePinAll);
+  document.getElementById('cleanEntityBtn').addEventListener('click', quickCleanByEntity);
   document.getElementById('clearGraphBtn').addEventListener('click', clearGraph);
+
+  // ── Sidebar type toggles ──
+  initTypeToggles();
 
   // ── Select mode ──
   const selectModeBtn = document.getElementById('selectModeBtn');
@@ -245,6 +387,8 @@ export async function loadGraph(params, depthArg, minConfArg) {
       min_confidence: minConf,
       since,
       until,
+      max_nodes: GRAPH_REQUEST_LIMITS.maxNodes,
+      max_edges: GRAPH_REQUEST_LIMITS.maxEdges,
     };
     if (seedId) {
       payload.seed_id = seedId;
@@ -261,6 +405,9 @@ export async function loadGraph(params, depthArg, minConfArg) {
       throw new Error(e.detail || 'Query failed');
     }
     const data = await res.json();
+    const truncated = res.headers.get('x-wellspring-graph-truncated') === '1';
+    const originalNodes = readIntHeader(res.headers, 'x-wellspring-original-nodes', data.nodes.length);
+    const originalEdges = readIntHeader(res.headers, 'x-wellspring-original-edges', data.edges.length);
     renderGraph(data);
     if (showTimeline) {
       try {
@@ -279,7 +426,14 @@ export async function loadGraph(params, depthArg, minConfArg) {
     } else {
       hideTimelinePanel();
     }
-    toast(`Loaded ${data.nodes.length} nodes, ${data.edges.length} edges`, 'success');
+    if (truncated) {
+      toast(
+        `Loaded ${data.nodes.length} nodes, ${data.edges.length} edges (truncated from ${originalNodes}/${originalEdges})`,
+        'success',
+      );
+    } else {
+      toast(`Loaded ${data.nodes.length} nodes, ${data.edges.length} edges`, 'success');
+    }
   } catch (e) {
     toast(e.message, 'error');
   } finally {
@@ -524,9 +678,12 @@ function clearGraph() {
   document.getElementById('graphToolbar').style.display = 'none';
   const er = document.getElementById('exportRow');
   if (er) er.style.display = 'none';
+  const lg = document.getElementById('graphLegend');
+  if (lg) { lg.style.display = 'none'; lg.innerHTML = ''; }
   if (sim) sim.stop();
   sim = null;
   graphData = null;
+  fullGraphData = null;
   selectMode = false;
   clearSelection();
   const smb = document.getElementById('selectModeBtn');
@@ -538,7 +695,11 @@ function clearGraph() {
 function renderGraph(data) {
   clearGraph();
   if (!data.nodes.length) { toast('No data to display', 'error'); return; }
+
+  // Store full data for reference
+  fullGraphData = data;
   graphData = data;
+  updateSidebarToggleCounts(data);
 
   document.getElementById('graphEmpty').style.display = 'none';
   document.getElementById('graphToolbar').style.display = 'flex';
@@ -562,6 +723,31 @@ function renderGraph(data) {
 
   g = svg.append('g');
 
+  // Define arrowhead markers
+  const defs = svg.append('defs');
+  defs.append('marker')
+    .attr('id', 'arrow')
+    .attr('viewBox', '0 -4 8 8')
+    .attr('refX', 20)
+    .attr('refY', 0)
+    .attr('markerWidth', 6)
+    .attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-3L7,0L0,3')
+    .attr('fill', '#9ca3af');
+  defs.append('marker')
+    .attr('id', 'arrow-highlight')
+    .attr('viewBox', '0 -4 8 8')
+    .attr('refX', 20)
+    .attr('refY', 0)
+    .attr('markerWidth', 6)
+    .attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-3L7,0L0,3')
+    .attr('fill', 'var(--accent)');
+
   // build links array for d3.forceLink
   const links = data.edges.map(e => ({
     id: e.id,
@@ -571,6 +757,12 @@ function renderGraph(data) {
     confidence: e.confidence,
     origin: e.attrs?.origin || 'extracted',
   }));
+  const degreeById = new Map();
+  links.forEach(l => {
+    degreeById.set(l.source, (degreeById.get(l.source) || 0) + 1);
+    degreeById.set(l.target, (degreeById.get(l.target) || 0) + 1);
+  });
+  const showEdgeLabels = data.edges.length <= GRAPH_RENDER_LIMITS.edgeLabelsMax;
 
   const link = g.selectAll('.link')
     .data(links)
@@ -580,7 +772,10 @@ function renderGraph(data) {
       if (d.origin === 'cooccurrence') return 'link cooccurrence';
       return 'link';
     })
-    .attr('stroke-width', d => 1 + d.confidence)
+    .attr('stroke-width', d => 0.8 + d.confidence * 2.5)
+    .attr('stroke-opacity', d => 0.2 + d.confidence * 0.6)
+    .attr('stroke', d => edgeColor(d.predicate))
+    .attr('marker-end', 'url(#arrow)')
     .style('cursor', 'pointer')
     .on('click', (event, d) => {
       if (selectMode) { event.stopPropagation(); toggleSelectEdge(d.id); }
@@ -591,11 +786,21 @@ function renderGraph(data) {
       explainRelation(d.id, d.predicate);
     });
 
-  const edgeLabel = g.selectAll('.edge-label')
-    .data(links)
-    .enter().append('text')
-    .attr('class', 'edge-label')
-    .text(d => d.predicate);
+  // Add title tooltip to all edges
+  link.append('title')
+    .text(d => `${d.predicate}  (confidence: ${(d.confidence * 100).toFixed(0)}%)`);
+
+  linkSel = link;
+
+  const edgeLabel = showEdgeLabels
+    ? g.selectAll('.edge-label')
+      .data(links)
+      .enter().append('text')
+      .attr('class', 'edge-label')
+      .text(d => d.predicate)
+    : null;
+
+  edgeLabelSel = edgeLabel;
 
   const node = g.selectAll('.node')
     .data(data.nodes)
@@ -608,19 +813,20 @@ function renderGraph(data) {
 
   node.append('circle')
     .attr('r', d => {
-      const deg = links.filter(l =>
-        l.source === d.id || l.target === d.id ||
-        l.source.id === d.id || l.target.id === d.id
-      ).length;
+      const deg = degreeById.get(d.id) || 0;
       return 10 + Math.min(deg * 2, 12);
     })
     .attr('fill', d => nodeColor(d))
     .attr('stroke', '#1e293b')
     .attr('stroke-width', 1.5)
     .style('cursor', 'pointer')
-    .on('mouseover', function() { d3.select(this).attr('stroke-width', 2.5); })
+    .on('mouseover', function(event, d) {
+      d3.select(this).attr('stroke-width', 2.5);
+      highlightNode(d.id, linkSel, nodeSel, edgeLabelSel);
+    })
     .on('mouseout', function(event, d) {
       d3.select(this).attr('stroke-width', selected.nodes.has(d.id) ? 3 : 1.5);
+      unhighlightAll(linkSel, nodeSel, edgeLabelSel);
     })
     .on('click', (event, d) => {
       if (selectMode) { event.stopPropagation(); toggleSelectNode(d.id); }
@@ -628,30 +834,54 @@ function renderGraph(data) {
     .on('contextmenu', (event, d) => { event.preventDefault(); showCtxMenu(event, d); })
     .on('dblclick', (event, d) => { event.stopPropagation(); expandNode(d); });
 
+  // Always keep names available on hover.
+  node.append('title')
+    .text(d => d.type ? `${d.name} (${d.type})` : d.name);
+
+  // Always show labels with stroke-based halo for readability
   node.append('text')
     .attr('class', 'node-label')
-    .attr('x', 18)
+    .attr('x', d => 12 + Math.min((degreeById.get(d.id) || 0) * 2, 12))
     .attr('y', 4)
     .text(d => d.name);
 
+  nodeSel = node;
+
+  const denseGraph = data.nodes.length > 250 || data.edges.length > 700;
   sim = d3.forceSimulation(data.nodes)
-    .force('link', d3.forceLink(links).id(d => d.id).distance(160))
-    .force('charge', d3.forceManyBody().strength(-400))
+    .force('link', d3.forceLink(links).id(d => d.id).distance(denseGraph ? 110 : 160))
+    .force('charge', d3.forceManyBody().strength(denseGraph ? -260 : -400))
     .force('center', d3.forceCenter(W / 2, H / 2))
-    .force('collision', d3.forceCollide(30));
+    .force('collision', d3.forceCollide(denseGraph ? 20 : 30))
+    .alphaDecay(denseGraph ? 0.05 : 0.0228);
 
   sim.on('tick', () => {
     link
       .attr('x1', d => d.source.x)
       .attr('y1', d => d.source.y)
-      .attr('x2', d => d.target.x)
-      .attr('y2', d => d.target.y);
+      .attr('x2', d => {
+        // Shorten line to avoid arrowhead overlap with node circle
+        const dx = d.target.x - d.source.x;
+        const dy = d.target.y - d.source.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const r = 10 + Math.min((degreeById.get(d.target.id || (typeof d.target === 'object' ? d.target.id : d.target)) || 0) * 2, 12);
+        return d.target.x - (dx / dist) * r;
+      })
+      .attr('y2', d => {
+        const dx = d.target.x - d.source.x;
+        const dy = d.target.y - d.source.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const r = 10 + Math.min((degreeById.get(d.target.id || (typeof d.target === 'object' ? d.target.id : d.target)) || 0) * 2, 12);
+        return d.target.y - (dy / dist) * r;
+      });
 
     node.attr('transform', d => `translate(${d.x},${d.y})`);
 
-    edgeLabel
-      .attr('x', d => (d.source.x + d.target.x) / 2)
-      .attr('y', d => (d.source.y + d.target.y) / 2);
+    if (edgeLabel) {
+      edgeLabel
+        .attr('x', d => (d.source.x + d.target.x) / 2)
+        .attr('y', d => (d.source.y + d.target.y) / 2);
+    }
   });
 
   // Re-apply select mode if it was active before re-render
@@ -660,6 +890,221 @@ function renderGraph(data) {
     svg.call(lassoDrag);
     svg.style('cursor', 'crosshair');
   }
+
+  // Build compact graph legend and apply type visibility
+  buildGraphLegend(data);
+  applyTypeVisibility();
+}
+
+/* ── sidebar type toggles ──────────────── */
+const ALL_ENTITY_TYPES = [
+  'threat_actor', 'malware', 'vulnerability', 'attack_pattern',
+  'campaign', 'tool', 'indicator', 'infrastructure',
+  'identity', 'mitigation', 'report',
+];
+
+function initTypeToggles() {
+  const list = document.getElementById('typeToggleList');
+  const allBtn = document.getElementById('toggleAllTypesBtn');
+  if (!list) return;
+
+  ALL_ENTITY_TYPES.forEach(typeName => {
+    const color = TYPE_COLORS[typeName] || '#9ca3af';
+    const row = document.createElement('label');
+    row.className = 'type-toggle-row';
+    row.dataset.type = typeName;
+    row.innerHTML =
+      `<span class="type-toggle-dot" style="background:${color}"></span>` +
+      `<span class="type-toggle-name">${typeName.replace(/_/g, ' ')}</span>` +
+      `<span class="type-toggle-count" data-type-count="${typeName}"></span>` +
+      `<input type="checkbox" class="type-toggle-cb" data-type="${typeName}" ${hiddenTypes.has(typeName) ? '' : 'checked'} />` +
+      `<span class="type-toggle-switch"></span>`;
+
+    const cb = row.querySelector('.type-toggle-cb');
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
+        hiddenTypes.delete(typeName);
+      } else {
+        hiddenTypes.add(typeName);
+      }
+      applyTypeVisibility();
+    });
+
+    list.appendChild(row);
+  });
+
+  if (allBtn) {
+    allBtn.addEventListener('click', () => {
+      const allOn = hiddenTypes.size === 0;
+      list.querySelectorAll('.type-toggle-cb').forEach(cb => {
+        const t = cb.dataset.type;
+        if (allOn) {
+          hiddenTypes.add(t);
+          cb.checked = false;
+        } else {
+          hiddenTypes.delete(t);
+          cb.checked = true;
+        }
+      });
+      if (fullGraphData) applyTypeVisibility();
+    });
+  }
+}
+
+/* ── live type visibility ──────────────── */
+function applyTypeVisibility() {
+  if (!g || !graphData) return;
+
+  // Build set of hidden node IDs
+  const hiddenNodeIds = new Set();
+  graphData.nodes.forEach(n => {
+    if (hiddenTypes.has(n.type || 'unknown')) hiddenNodeIds.add(n.id);
+  });
+
+  // Hide/show nodes
+  g.selectAll('.node')
+    .transition().duration(200)
+    .style('opacity', d => hiddenTypes.has(d.type || 'unknown') ? 0 : 1)
+    .on('end', function(d) {
+      d3.select(this).style('pointer-events',
+        hiddenTypes.has(d.type || 'unknown') ? 'none' : null);
+    });
+
+  // Hide/show edges connected to hidden nodes
+  g.selectAll('.link')
+    .transition().duration(200)
+    .style('opacity', d => {
+      const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+      const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+      return (hiddenNodeIds.has(srcId) || hiddenNodeIds.has(tgtId)) ? 0 : null;
+    })
+    .on('end', function(d) {
+      const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+      const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+      d3.select(this).style('pointer-events',
+        (hiddenNodeIds.has(srcId) || hiddenNodeIds.has(tgtId)) ? 'none' : null);
+    });
+
+  g.selectAll('.edge-label')
+    .transition().duration(200)
+    .style('opacity', d => {
+      const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+      const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+      return (hiddenNodeIds.has(srcId) || hiddenNodeIds.has(tgtId)) ? 0 : null;
+    });
+
+  // Update legend to reflect visible types
+  buildGraphLegend(graphData);
+}
+
+/* ── node hover highlighting ───────────── */
+function highlightNode(nodeId, linkSel, nodeSel, edgeLabelSel) {
+  const connectedIds = new Set([nodeId]);
+  linkSel.each(d => {
+    const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+    const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+    if (srcId === nodeId) connectedIds.add(tgtId);
+    if (tgtId === nodeId) connectedIds.add(srcId);
+  });
+
+  nodeSel
+    .transition().duration(150)
+    .style('opacity', d => connectedIds.has(d.id) ? 1 : 0.08);
+
+  linkSel
+    .transition().duration(150)
+    .attr('stroke-opacity', d => {
+      const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+      const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+      return (srcId === nodeId || tgtId === nodeId) ? 0.9 : 0.02;
+    })
+    .attr('stroke-width', d => {
+      const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+      const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+      return (srcId === nodeId || tgtId === nodeId) ? 2 + d.confidence * 3 : 0.3;
+    })
+    .attr('marker-end', d => {
+      const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+      const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+      return (srcId === nodeId || tgtId === nodeId) ? 'url(#arrow-highlight)' : 'url(#arrow)';
+    });
+
+  if (edgeLabelSel) {
+    edgeLabelSel
+      .transition().duration(150)
+      .style('opacity', d => {
+        const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+        const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+        return (srcId === nodeId || tgtId === nodeId) ? 1 : 0;
+      })
+      .style('font-weight', d => {
+        const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+        const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+        return (srcId === nodeId || tgtId === nodeId) ? '600' : null;
+      });
+  }
+}
+
+function unhighlightAll(linkSel, nodeSel, edgeLabelSel) {
+  nodeSel
+    .transition().duration(200)
+    .style('opacity', d => hiddenTypes.has(d.type || 'unknown') ? 0 : 1);
+
+  linkSel
+    .transition().duration(200)
+    .attr('stroke-opacity', d => 0.2 + d.confidence * 0.6)
+    .attr('stroke-width', d => 0.8 + d.confidence * 2.5)
+    .attr('marker-end', 'url(#arrow)');
+
+  if (edgeLabelSel) {
+    edgeLabelSel
+      .transition().duration(200)
+      .style('opacity', 1)
+      .style('font-weight', null);
+  }
+}
+
+function updateSidebarToggleCounts(data) {
+  const typeCounts = new Map();
+  data.nodes.forEach(n => {
+    const t = n.type || 'unknown';
+    typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
+  });
+
+  document.querySelectorAll('[data-type-count]').forEach(el => {
+    const t = el.dataset.typeCount;
+    const c = typeCounts.get(t) || 0;
+    el.textContent = c > 0 ? c : '';
+  });
+
+  // Show rows that have data, dim rows that don't
+  document.querySelectorAll('.type-toggle-row').forEach(row => {
+    const t = row.dataset.type;
+    const c = typeCounts.get(t) || 0;
+    row.classList.toggle('has-data', c > 0);
+  });
+}
+
+/* ── compact graph legend ──────────────── */
+function buildGraphLegend(data) {
+  const legend = document.getElementById('graphLegend');
+  if (!legend) return;
+
+  const typeCounts = new Map();
+  data.nodes.forEach(n => {
+    const t = n.type || 'unknown';
+    if (hiddenTypes.has(t)) return;
+    typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
+  });
+
+  const types = [...typeCounts.entries()].sort((a, b) => b[1] - a[1]);
+  if (!types.length) { legend.style.display = 'none'; return; }
+
+  legend.style.display = 'flex';
+  legend.innerHTML = types.map(([t, c]) => {
+    const color = TYPE_COLORS[t] || '#9ca3af';
+    return `<span class="legend-item"><span class="legend-dot" style="background:${color}"></span>${t.replace(/_/g, ' ')} ${c}</span>`;
+  }).join('');
 }
 
 /* ── drag handlers ─────────────────────── */
@@ -741,6 +1186,8 @@ async function expandNode(d) {
         min_confidence: getConf(),
         since: temporal.since,
         until: temporal.until,
+        max_nodes: GRAPH_REQUEST_LIMITS.maxNodes,
+        max_edges: GRAPH_REQUEST_LIMITS.maxEdges,
       }),
     });
     if (!res.ok) throw new Error('Expand failed');

@@ -26,6 +26,8 @@ class Settings:
     elastic_verify_certs: bool = _env_bool("ELASTICSEARCH_VERIFY_CERTS", "1")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     wellspring_api_base_url: str = os.getenv("WELLSPRING_API_BASE_URL", "")
+    query_max_nodes: int = int(os.getenv("QUERY_MAX_NODES", "400"))
+    query_max_edges: int = int(os.getenv("QUERY_MAX_EDGES", "1200"))
     enable_cooccurrence: bool = os.getenv("ENABLE_COOCCURRENCE", "0") == "1"
     cooccurrence_max_entities: int = int(os.getenv("CO_OCCURRENCE_MAX_ENTITIES", "25"))
     enable_inference: bool = os.getenv("ENABLE_INFERENCE", "0") == "1"

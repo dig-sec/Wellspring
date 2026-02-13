@@ -15,6 +15,7 @@ from ..elastic_source import ElasticsearchSourceClient, pull_from_elasticsearch
 from ..export import export_csv_zip, export_graphml, export_json, export_markdown
 from ..opencti.client import OpenCTIClient
 from ..opencti.sync import pull_from_opencti
+from ..graph_limits import limit_subgraph
 from ..schemas import (
     ExplainEntityRelation,
     ExplainEntityResponse,
@@ -63,6 +64,19 @@ def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(text)
     except ValueError:
         return None
+
+
+def _parse_window_bounds(
+    since: Optional[str],
+    until: Optional[str],
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    if not since or not until:
+        return None, None
+    since_dt = _parse_iso_datetime(since if "T" in since else since + "T00:00:00Z")
+    until_dt = _parse_iso_datetime(until if "T" in until else until + "T23:59:59Z")
+    if not since_dt or not until_dt:
+        raise HTTPException(status_code=400, detail="Invalid since/until date format")
+    return since_dt, until_dt
 
 
 def _bucket_start(dt: datetime, interval: str) -> datetime:
@@ -453,7 +467,7 @@ def run_status(run_id: str) -> RunStatusResponse:
 
 
 @router.post("/query", response_model=Subgraph)
-def query(payload: QueryRequest) -> Subgraph:
+def query(payload: QueryRequest, response: Response) -> Subgraph:
     if payload.seed_id:
         seed = payload.seed_id
         if not graph_store.get_entity(seed):
@@ -466,7 +480,7 @@ def query(payload: QueryRequest) -> Subgraph:
     else:
         raise HTTPException(status_code=400, detail="seed_id or seed_name required")
 
-    return graph_store.get_subgraph(
+    subgraph = graph_store.get_subgraph(
         seed_entity_id=seed,
         depth=payload.depth,
         min_confidence=payload.min_confidence,
@@ -474,6 +488,27 @@ def query(payload: QueryRequest) -> Subgraph:
         since=payload.since,
         until=payload.until,
     )
+    capped_subgraph, truncated = limit_subgraph(
+        subgraph,
+        seed_id=seed,
+        max_nodes=(
+            payload.max_nodes
+            if payload.max_nodes is not None
+            else settings.query_max_nodes
+        ),
+        max_edges=(
+            payload.max_edges
+            if payload.max_edges is not None
+            else settings.query_max_edges
+        ),
+    )
+    if truncated:
+        response.headers["X-Wellspring-Graph-Truncated"] = "1"
+        response.headers["X-Wellspring-Original-Nodes"] = str(len(subgraph.nodes))
+        response.headers["X-Wellspring-Original-Edges"] = str(len(subgraph.edges))
+        response.headers["X-Wellspring-Limited-Nodes"] = str(len(capped_subgraph.nodes))
+        response.headers["X-Wellspring-Limited-Edges"] = str(len(capped_subgraph.edges))
+    return capped_subgraph
 
 
 @router.get("/explain", response_model=ExplainResponse | ExplainEntityResponse)
@@ -533,6 +568,12 @@ def visualize(
         source_uri=source_uri,
         since=since,
         until=until,
+    )
+    subgraph, _ = limit_subgraph(
+        subgraph,
+        seed_id=seed,
+        max_nodes=settings.query_max_nodes,
+        max_edges=settings.query_max_edges,
     )
     title = f"Wellspring Graph: {seed_name or seed_id}"
     return render_html(subgraph, title=title)
@@ -1619,7 +1660,7 @@ async def trigger_metrics_rollup(
     ),
     source_uri: Optional[str] = Query(default=None),
 ):
-    """Run daily threat-actor rollup in the background."""
+    """Run daily metrics rollups (threat actors + PIR) in the background."""
     task = task_manager.create(
         "metrics_rollup",
         {
@@ -1634,19 +1675,30 @@ async def trigger_metrics_rollup(
 
     def _run_sync():
         try:
-            summary = metrics_store.rollup_daily_threat_actor_stats(
+            threat_actor_summary = metrics_store.rollup_daily_threat_actor_stats(
                 lookback_days=lookback_days,
                 min_confidence=min_confidence,
                 source_uri=source_uri,
             )
+            pir_summary = metrics_store.rollup_daily_pir_stats(
+                lookback_days=lookback_days,
+                min_confidence=min_confidence,
+                source_uri=source_uri,
+            )
+            summary = {
+                "threat_actor": threat_actor_summary,
+                "pir": pir_summary,
+                "lookback_days": lookback_days,
+                "min_confidence": min_confidence,
+                "source_uri": source_uri,
+            }
             task_manager.update(
                 task.id,
                 status=TaskStatus.COMPLETED,
                 progress=(
                     "Done: "
-                    f"{summary.get('docs_written', 0)} docs, "
-                    f"{summary.get('buckets_written', 0)} buckets, "
-                    f"{summary.get('actors_total', 0)} actors"
+                    f"{threat_actor_summary.get('docs_written', 0)} threat-actor docs, "
+                    f"{pir_summary.get('docs_written', 0)} PIR docs"
                 ),
                 detail=summary,
                 finished_at=datetime.utcnow().isoformat(),
@@ -1748,25 +1800,28 @@ def pir_trending(
     until: Optional[str] = Query(default=None),
 ):
     """Priority Intelligence Requirements: trending entities for current vs previous window."""
-    pir_fn = getattr(graph_store, "get_pir_trending_summary", None)
-    if not callable(pir_fn):
-        raise HTTPException(
-            status_code=501,
-            detail="PIR trending is only available on Elasticsearch backend",
-        )
-    kwargs: dict = {"top_n": top_n, "source_uri": source_uri}
-    if since and until:
-        from datetime import datetime as _dt, timezone as _tz
-        try:
-            _since = _dt.fromisoformat(since).replace(tzinfo=_tz.utc) if "T" in since else _dt.fromisoformat(since + "T00:00:00").replace(tzinfo=_tz.utc)
-            _until = _dt.fromisoformat(until).replace(tzinfo=_tz.utc) if "T" in until else _dt.fromisoformat(until + "T23:59:59").replace(tzinfo=_tz.utc)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid since/until date format")
-        kwargs["since"] = _since
-        kwargs["until"] = _until
-    else:
-        kwargs["days"] = days
-    return pir_fn(**kwargs)
+    since_dt, until_dt = _parse_window_bounds(since, until)
+    kwargs: dict = {
+        "top_n": top_n,
+        "source_uri": source_uri,
+        "days": days,
+        "since": since_dt,
+        "until": until_dt,
+    }
+
+    pir_metrics_fn = getattr(metrics_store, "get_pir_trending_summary", None)
+    if callable(pir_metrics_fn):
+        return pir_metrics_fn(**kwargs)
+
+    # Fallback for backends that do not implement metrics-backed PIR rollups.
+    pir_graph_fn = getattr(graph_store, "get_pir_trending_summary", None)
+    if callable(pir_graph_fn):
+        return pir_graph_fn(**kwargs)
+
+    raise HTTPException(
+        status_code=501,
+        detail="PIR trending is only available on Elasticsearch backend",
+    )
 
 
 @router.get("/api/pir/entity-context")

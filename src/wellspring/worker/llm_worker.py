@@ -62,17 +62,29 @@ async def metrics_rollup_loop(metrics_store: MetricsStore) -> None:
     )
     while not _shutdown.is_set():
         try:
-            summary = await asyncio.to_thread(
+            threat_actor_summary = await asyncio.to_thread(
                 metrics_store.rollup_daily_threat_actor_stats,
                 lookback_days,
                 min_confidence,
                 None,
             )
+            pir_summary = await asyncio.to_thread(
+                metrics_store.rollup_daily_pir_stats,
+                lookback_days,
+                min_confidence,
+                None,
+            )
             logger.info(
-                "Metrics rollup complete: %d docs, %d buckets, %d actors",
-                int(summary.get("docs_written", 0)),
-                int(summary.get("buckets_written", 0)),
-                int(summary.get("actors_total", 0)),
+                (
+                    "Metrics rollup complete: threat_actor=%d docs/%d buckets/%d actors, "
+                    "pir=%d docs/%d buckets/%d entities"
+                ),
+                int(threat_actor_summary.get("docs_written", 0)),
+                int(threat_actor_summary.get("buckets_written", 0)),
+                int(threat_actor_summary.get("actors_total", 0)),
+                int(pir_summary.get("docs_written", 0)),
+                int(pir_summary.get("buckets_written", 0)),
+                int(pir_summary.get("entities_total", 0)),
             )
         except Exception:
             logger.exception("Metrics rollup failed")

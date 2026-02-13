@@ -88,13 +88,17 @@ export function initPIR() {
     const totalEntities = questions.reduce((s, q) => s + (q.items?.length || 0), 0);
     const windowLabel   = formatWindow(data.window);
     const generatedAt   = formatTimeAgo(data.generated_at);
+    const rollupAt      = data.rollup_last_generated_at ? formatTimeAgo(data.rollup_last_generated_at) : '';
+    const statusLine = rollupAt
+      ? `${escapeHtml(windowLabel)} &middot; updated ${escapeHtml(generatedAt)} &middot; rollup ${escapeHtml(rollupAt)}`
+      : `${escapeHtml(windowLabel)} &middot; updated ${escapeHtml(generatedAt)}`;
 
     list.innerHTML = `
       <div class="pir-banner">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
         <div class="pir-banner-text">
           <strong>${totalEntities} trending entit${totalEntities === 1 ? 'y' : 'ies'} across ${questions.length} categories</strong>
-          <span>${escapeHtml(windowLabel)} &middot; updated ${escapeHtml(generatedAt)}</span>
+          <span>${statusLine}</span>
         </div>
       </div>
       <div class="pir-grid">
@@ -274,8 +278,8 @@ export function initPIR() {
     const delta      = Number(item?.delta_evidence || 0);
     const current    = Number(item?.current_evidence || 0);
     const previous   = Number(item?.previous_evidence || 0);
-    const trendScore = Number(item?.trend_score || 0);
     const predicates = Array.isArray(item?.top_predicates) ? item.top_predicates : [];
+    const history    = Array.isArray(item?.history) ? item.history : [];
     const type       = String(item?.type || 'unknown');
     const name       = item?.name || 'Unknown';
     const entityId   = item?.entity_id || '';
@@ -296,6 +300,7 @@ export function initPIR() {
     /* bar width proportional to max */
     const barPct = maxEvidence ? Math.round((current / maxEvidence) * 100) : 0;
     const barColor = `var(--c-${type}, #94a3b8)`;
+    const sparkline = renderSparkline(history, type, `${name} activity`);
 
     return `
       <article class="pir-item" data-entity-id="${escapeHtml(entityId)}" data-entity-name="${escapeHtml(name)}">
@@ -308,6 +313,7 @@ export function initPIR() {
           <div class="pir-sparkrow">
             <span class="pir-evidence">${formatInt(current)} evidence (was ${formatInt(previous)})</span>
             <span class="pir-trend-badge ${trendClass}">${trendLabel}</span>
+            ${sparkline}
             <span class="pir-bar-track"><span class="pir-bar-fill" style="width:${barPct}%;background:${barColor}"></span></span>
           </div>
           ${predicates.length
@@ -322,6 +328,26 @@ export function initPIR() {
 function formatInt(value) {
   const parsed = Number(value || 0);
   return Number.isFinite(parsed) ? Math.round(parsed).toLocaleString() : '0';
+}
+
+function renderSparkline(history, type, title) {
+  const values = history.map(h => Number(h?.evidence_count || 0));
+  if (!values.length) return '';
+  const w = 84;
+  const h = 20;
+  const maxVal = Math.max(...values, 1);
+  const step = values.length > 1 ? w / (values.length - 1) : 0;
+  const pts = values.map((v, i) => {
+    const x = i * step;
+    const y = h - (v / maxVal) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const stroke = `var(--c-${type}, #64748b)`;
+  return `
+    <svg class="pir-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(title)}">
+      <polyline class="pir-spark-line" points="${pts.join(' ')}" style="stroke:${stroke}"></polyline>
+    </svg>
+  `;
 }
 
 function formatTimeAgo(value) {

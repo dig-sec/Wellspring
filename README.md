@@ -67,6 +67,8 @@ Environment variables:
 - `PROMPT_VERSION` (default: `v1`)
 - `LOG_LEVEL` (default: `INFO`)
 - `WELLSPRING_API_BASE_URL` (default: empty; optional absolute API base URL for UI fetches)
+- `QUERY_MAX_NODES` (default: `400`; soft cap for `/query` and `/visualize`, `0` disables)
+- `QUERY_MAX_EDGES` (default: `1200`; soft cap for `/query` and `/visualize`, `0` disables)
 - `ENABLE_COOCCURRENCE` (default: `0`)
 - `CO_OCCURRENCE_MAX_ENTITIES` (default: `25`)
 - `ENABLE_INFERENCE` (default: `0`)
@@ -111,6 +113,7 @@ curl -X POST "http://localhost:8000/api/elasticsearch/pull?indices=feedly_news&m
 ## Temporal Analysis
 
 Use `since` / `until` on `/query` to filter graph edges by provenance timestamp.
+`/query` responses are capped by `QUERY_MAX_NODES` / `QUERY_MAX_EDGES` by default to keep the UI responsive. You can override per request with `max_nodes` and `max_edges`.
 
 ```bash
 curl -X POST http://localhost:8000/query \
@@ -140,8 +143,10 @@ Daily threat-actor metrics are rolled up into the Elasticsearch index
 `<ELASTICSEARCH_INDEX_PREFIX>-metrics` (default: `wellspring-metrics`).
 The worker updates this on a schedule, and `/api/stats` exposes freshness and
 active-actor counts for the last 30 days.
+PIR trend summaries are also precomputed daily in this metrics index and served
+by `/api/pir/trending`, avoiding heavy on-demand provenance scans.
 
-You can also trigger a manual rollup:
+You can also trigger a manual rollup (threat actors + PIR):
 
 ```bash
 curl -X POST "http://localhost:8000/api/metrics/rollup?lookback_days=365&min_confidence=0.2"

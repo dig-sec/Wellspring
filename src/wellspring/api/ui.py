@@ -136,6 +136,14 @@ def render_root_ui(root_path: str = "", api_base_url: str = "") -> str:
               </label>
             </div>
           </div>
+          <!-- type filter toggles -->
+          <div class="type-toggles" id="typeToggles">
+            <div class="type-toggles-header">
+              <span class="type-toggles-title">Include Types</span>
+              <button class="type-toggles-all" id="toggleAllTypesBtn" title="Toggle all on/off">All</button>
+            </div>
+            <div class="type-toggle-list" id="typeToggleList"></div>
+          </div>
           <div class="btn-row">
             <button class="btn btn-primary" id="vizBtn" style="flex:1">Visualize</button>
           </div>
@@ -258,6 +266,7 @@ def render_root_ui(root_path: str = "", api_base_url: str = "") -> str:
 
     <!-- == GRAPH AREA == -->
     <div class="graph-area" id="graphArea">
+      <div class="graph-legend" id="graphLegend" style="display:none"></div>
       <div class="graph-toolbar" id="graphToolbar" style="display:none">
         <button class="btn btn-sm" id="zoomInBtn" title="Zoom in">+</button>
         <button class="btn btn-sm" id="zoomOutBtn" title="Zoom out">&minus;</button>
@@ -266,6 +275,7 @@ def render_root_ui(root_path: str = "", api_base_url: str = "") -> str:
         <span class="toolbar-sep"></span>
         <button class="btn btn-sm" id="selectModeBtn" title="Toggle select mode">&#9632; Select</button>
         <button class="btn btn-sm btn-danger" id="deleteSelectedBtn" title="Remove selected" style="display:none">&#x1F5D1; Remove (<span id="selCount">0</span>)</button>
+        <button class="btn btn-sm" id="cleanEntityBtn" title="Remove nodes by entity">Clean</button>
         <button class="btn btn-sm" id="clearGraphBtn" title="Clear graph">&times;</button>
       </div>
       <div class="empty-state" id="graphEmpty">
