@@ -30,6 +30,21 @@ curl -X POST http://localhost:8000/query \
 
 Open `http://localhost:8000/visualize?seed_name=Ada%20Lovelace&depth=1`
 
+## Testing
+
+Install dev dependencies and run the suite:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Run with coverage reporting:
+
+```bash
+pytest --cov=src --cov-report=term-missing
+```
+
 ## Configuration
 
 Environment variables:
@@ -67,7 +82,6 @@ Environment variables:
 - `PROMPT_VERSION` (default: `v1`)
 - `LOG_LEVEL` (default: `INFO`)
 - `MIMIR_API_BASE_URL` (default: empty; optional absolute API base URL for UI fetches)
-  - Backward compatible fallback: `WELLSPRING_API_BASE_URL`
 - `MIMIR_API_TOKEN` (default: empty; bearer token for API access)
 - `MIMIR_ALLOW_LOCALHOST_WITHOUT_TOKEN` (default: `1`; allow unauthenticated localhost requests when no token is set)
 - `MIMIR_EXPOSE_LOCAL_PATHS` (default: `0`; expose absolute watched-folder paths in API responses)

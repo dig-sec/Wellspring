@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import ipaddress
 import logging
-import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,30 +9,12 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import get_settings
+from .access import authorize_request
 from .routes import router
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
-
-
-def _is_loopback_host(host: str) -> bool:
-    if not host:
-        return False
-    try:
-        addr = ipaddress.ip_address(host.split("%", 1)[0])
-        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
-            return addr.ipv4_mapped.is_loopback
-        return addr.is_loopback
-    except ValueError:
-        return host.lower() == "localhost"
-
-
-def _request_token(request: Request) -> str:
-    header_value = request.headers.get("authorization", "")
-    if header_value.lower().startswith("bearer "):
-        return header_value[7:].strip()
-    return request.headers.get("x-api-key", "").strip()
 
 
 @asynccontextmanager
@@ -56,36 +36,21 @@ app = FastAPI(title="Mimir API", version="0.1.0", lifespan=lifespan)
 
 @app.middleware("http")
 async def enforce_access_controls(request: Request, call_next):
-    path = request.url.path
-    if request.method == "OPTIONS" or path.startswith("/static"):
+    allowed, status_code, detail = authorize_request(
+        request,
+        api_token=settings.api_token,
+        allow_localhost_without_token=settings.allow_localhost_without_token,
+    )
+    if allowed:
         return await call_next(request)
 
-    configured_token = settings.api_token.strip()
-    if configured_token:
-        provided = _request_token(request)
-        if not provided or not secrets.compare_digest(provided, configured_token):
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-        return await call_next(request)
-
-    if settings.allow_localhost_without_token:
-        client_host = request.client.host if request.client else ""
-        if _is_loopback_host(client_host):
-            return await call_next(request)
-
-    logger.warning(
-        "Blocked unauthenticated request from host=%s path=%s",
-        request.client.host if request.client else "",
-        path,
-    )
-    return JSONResponse(
-        status_code=403,
-        content={
-            "detail": (
-                "Access denied. Configure MIMIR_API_TOKEN or enable "
-                "MIMIR_ALLOW_LOCALHOST_WITHOUT_TOKEN for local use."
-            )
-        },
-    )
+    if status_code == 403:
+        logger.warning(
+            "Blocked unauthenticated request from host=%s path=%s",
+            request.client.host if request.client else "",
+            request.url.path,
+        )
+    return JSONResponse(status_code=status_code, content={"detail": detail})
 
 
 # Serve static assets (CSS, JS)

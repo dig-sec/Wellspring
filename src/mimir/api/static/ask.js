@@ -1,4 +1,4 @@
-import { toast, apiFetch, apiUrl } from './helpers.js';
+import { toast, apiUrl } from './helpers.js';
 
 /* ── entity-type dot color class ────────── */
 function typeClass(t) {

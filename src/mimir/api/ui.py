@@ -12,13 +12,14 @@ def _normalize_root_path(root_path: str) -> str:
     return value.rstrip("/")
 
 
-def render_root_ui(root_path: str = "", api_base_url: str = "") -> str:
+def render_root_ui(root_path: str = "", api_base_url: str = "", ollama_model: str = "phi4") -> str:
     """Render the shell HTML — all logic lives in static JS/CSS files."""
     root_prefix = _normalize_root_path(root_path)
     static_prefix = f"{root_prefix}/static" if root_prefix else "/static"
     docs_href = f"{root_prefix}/docs" if root_prefix else "/docs"
     root_path_json = json.dumps(root_prefix)
     api_base_json = json.dumps(str(api_base_url or "").strip())
+    model_display = json.dumps(str(ollama_model or "phi4").strip())[1:-1]  # strip quotes
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -230,7 +231,7 @@ def render_root_ui(root_path: str = "", api_base_url: str = "") -> str:
         <div class="ask-header">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
           <h2>Ask Mimir</h2>
-          <span class="ask-model-badge" id="askModelBadge">phi4 via Ollama</span>
+          <span class="ask-model-badge" id="askModelBadge">{model_display} via Ollama</span>
         </div>
         <div class="ask-messages" id="askMessages">
           <div class="ask-welcome">
@@ -238,7 +239,7 @@ def render_root_ui(root_path: str = "", api_base_url: str = "") -> str:
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
             </div>
             <h3>Ask questions about your knowledge graph</h3>
-            <p>Mimir will search entities, relationships, and provenance to answer your question using phi4.</p>
+            <p>Mimir will search entities, relationships, and provenance to answer your question using {model_display}.</p>
             <div class="ask-suggestions">
               <button class="ask-suggestion" data-q="What are the most significant threat actors in the knowledge graph?">Top threat actors</button>
               <button class="ask-suggestion" data-q="What malware families are tracked and how are they related?">Malware families</button>
@@ -353,9 +354,6 @@ def render_root_ui(root_path: str = "", api_base_url: str = "") -> str:
   <script>
     window.__MIMIR_ROOT_PATH__ = {root_path_json};
     window.__MIMIR_API_BASE__ = {api_base_json};
-    // Backward compatibility for any older custom scripts.
-    window.__WELLSPRING_ROOT_PATH__ = window.__MIMIR_ROOT_PATH__;
-    window.__WELLSPRING_API_BASE__ = window.__MIMIR_API_BASE__;
   </script>
   <script src="{static_prefix}/vendor/d3.v7.min.js"></script>
   <script type="module" src="{static_prefix}/main.js"></script>

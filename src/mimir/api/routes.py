@@ -141,6 +141,7 @@ def root(request: Request) -> str:
     return render_root_ui(
         root_path=root_path,
         api_base_url=settings.mimir_api_base_url,
+        ollama_model=settings.ollama_model,
     )
 
 
@@ -2333,7 +2334,9 @@ async def ask_question(request: Request):
         except httpx.TimeoutException:
             yield f"data: {_json.dumps({'type': 'error', 'message': 'Ollama request timed out.'})}\n\n"
         except Exception as exc:
-            yield f"data: {_json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            import logging as _logging
+            _logging.getLogger(__name__).exception("Ask endpoint error")
+            yield f"data: {_json.dumps({'type': 'error', 'message': 'An internal error occurred while generating the answer.'})}\n\n"
 
     return StreamingResponse(
         _stream_response(),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -67,7 +67,7 @@ class TaskManager:
             kind=kind,
             status=TaskStatus.PENDING,
             detail=detail or {},
-            started_at=datetime.utcnow().isoformat(),
+            started_at=datetime.now(timezone.utc).isoformat(),
         )
         self._tasks[task.id] = task
         return task
@@ -99,7 +99,7 @@ class TaskManager:
                     task_id,
                     status=TaskStatus.FAILED,
                     error=str(exc),
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=datetime.now(timezone.utc).isoformat(),
                 )
             finally:
                 self._running.pop(task_id, None)

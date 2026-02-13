@@ -25,10 +25,7 @@ class Settings:
     elastic_index_prefix: str = os.getenv("ELASTICSEARCH_INDEX_PREFIX", "mimir")
     elastic_verify_certs: bool = _env_bool("ELASTICSEARCH_VERIFY_CERTS", "1")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
-    mimir_api_base_url: str = os.getenv(
-        "MIMIR_API_BASE_URL",
-        os.getenv("WELLSPRING_API_BASE_URL", ""),
-    )
+    mimir_api_base_url: str = os.getenv("MIMIR_API_BASE_URL", "")
     api_token: str = os.getenv("MIMIR_API_TOKEN", "")
     allow_localhost_without_token: bool = _env_bool(
         "MIMIR_ALLOW_LOCALHOST_WITHOUT_TOKEN", "1"
@@ -37,11 +34,11 @@ class Settings:
     search_query_max_length: int = int(os.getenv("SEARCH_QUERY_MAX_LENGTH", "120"))
     query_max_nodes: int = int(os.getenv("QUERY_MAX_NODES", "400"))
     query_max_edges: int = int(os.getenv("QUERY_MAX_EDGES", "1200"))
-    enable_cooccurrence: bool = os.getenv("ENABLE_COOCCURRENCE", "0") == "1"
+    enable_cooccurrence: bool = _env_bool("ENABLE_COOCCURRENCE", "0")
     cooccurrence_max_entities: int = int(os.getenv("CO_OCCURRENCE_MAX_ENTITIES", "25"))
-    enable_inference: bool = os.getenv("ENABLE_INFERENCE", "0") == "1"
+    enable_inference: bool = _env_bool("ENABLE_INFERENCE", "0")
     max_chunks_per_run: int = int(os.getenv("MAX_CHUNKS_PER_RUN", "50"))
-    metrics_rollup_enabled: bool = os.getenv("METRICS_ROLLUP_ENABLED", "1") == "1"
+    metrics_rollup_enabled: bool = _env_bool("METRICS_ROLLUP_ENABLED", "1")
     metrics_rollup_interval_seconds: int = int(
         os.getenv("METRICS_ROLLUP_INTERVAL_SECONDS", "900")
     )

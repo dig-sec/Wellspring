@@ -8,7 +8,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, TypeVar
 from uuid import UUID, uuid5
 
-from elasticsearch import ApiError, ConflictError, Elasticsearch, NotFoundError
+from elasticsearch import (
+    ApiError,
+    ConflictError,
+    ConnectionError as ESConnectionError,
+    ConnectionTimeout,
+    Elasticsearch,
+    NotFoundError,
+)
 
 from ..normalize import canonical_entity_key
 from ..schemas import (
@@ -153,8 +160,8 @@ def _retry_with_backoff(
                 import time
                 time.sleep(delay)
                 delay *= 2  # Exponential backoff
-        except Exception as exc:
-            # Retry on connection/timeout errors
+        except (ESConnectionError, ConnectionTimeout, OSError) as exc:
+            # Retry on connection/timeout errors only
             last_exception = exc
             if attempt < max_attempts - 1:
                 logger.debug(
@@ -636,6 +643,8 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
             return []
 
         normalized_query = query.strip()
+        if not normalized_query:
+            return []
         wildcard_value = (
             normalized_query.replace("\\", "\\\\")
             .replace("*", "\\*")
