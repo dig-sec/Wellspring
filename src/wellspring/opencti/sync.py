@@ -385,9 +385,10 @@ def _sync_reports(
             # Deterministic run ID prevents re-queuing unchanged reports
             # every worker cycle while still allowing updated text to requeue.
             dedupe_material = f"{source_uri}|{report_text}"
-            run_id = "opencti-report-" + hashlib.sha1(
-                dedupe_material.encode("utf-8")
-            ).hexdigest()
+            run_id = (
+                "opencti-report-"
+                + hashlib.sha1(dedupe_material.encode("utf-8")).hexdigest()
+            )
 
             if not run_store.get_run(run_id):
                 run = ExtractionRun(

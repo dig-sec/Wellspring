@@ -38,4 +38,5 @@ def create_metrics_store(settings: "Settings") -> MetricsStore:
         password=settings.elastic_password,
         index_prefix=settings.elastic_index_prefix,
         verify_certs=settings.elastic_verify_certs,
+        cti_level_thresholds=settings.cti_level_thresholds_list,
     )

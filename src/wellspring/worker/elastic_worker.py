@@ -70,9 +70,7 @@ async def elastic_worker_loop() -> None:
         return
 
     if not settings.elastic_connector_hosts_list:
-        logger.warning(
-            "Elasticsearch worker: no connector hosts configured. Exiting."
-        )
+        logger.warning("Elasticsearch worker: no connector hosts configured. Exiting.")
         return
 
     interval_minutes = settings.elastic_worker_interval_minutes

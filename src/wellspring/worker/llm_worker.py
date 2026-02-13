@@ -53,12 +53,19 @@ async def metrics_rollup_loop(metrics_store: MetricsStore) -> None:
     interval = max(settings.metrics_rollup_interval_seconds, 30)
     lookback_days = max(settings.metrics_rollup_lookback_days, 1)
     min_confidence = max(0.0, min(settings.metrics_rollup_min_confidence, 1.0))
+    cti_enabled = settings.cti_rollup_enabled
+    cti_lookback_days = max(settings.cti_rollup_lookback_days, 1)
 
     logger.info(
-        "Metrics rollup enabled: interval=%ss lookback_days=%s min_confidence=%.2f",
+        (
+            "Metrics rollup enabled: interval=%ss lookback_days=%s "
+            "min_confidence=%.2f cti_enabled=%s cti_lookback_days=%s"
+        ),
         interval,
         lookback_days,
         min_confidence,
+        cti_enabled,
+        cti_lookback_days,
     )
     while not _shutdown.is_set():
         try:
@@ -74,10 +81,20 @@ async def metrics_rollup_loop(metrics_store: MetricsStore) -> None:
                 min_confidence,
                 None,
             )
+            cti_summary = None
+            cti_rollup_fn = getattr(metrics_store, "rollup_daily_cti_assessments", None)
+            if cti_enabled and callable(cti_rollup_fn):
+                cti_summary = await asyncio.to_thread(
+                    cti_rollup_fn,
+                    cti_lookback_days,
+                    min_confidence,
+                    None,
+                    max(settings.cti_decay_half_life_days, 1),
+                )
             logger.info(
                 (
                     "Metrics rollup complete: threat_actor=%d docs/%d buckets/%d actors, "
-                    "pir=%d docs/%d buckets/%d entities"
+                    "pir=%d docs/%d buckets/%d entities%s"
                 ),
                 int(threat_actor_summary.get("docs_written", 0)),
                 int(threat_actor_summary.get("buckets_written", 0)),
@@ -85,6 +102,13 @@ async def metrics_rollup_loop(metrics_store: MetricsStore) -> None:
                 int(pir_summary.get("docs_written", 0)),
                 int(pir_summary.get("buckets_written", 0)),
                 int(pir_summary.get("entities_total", 0)),
+                (
+                    f", cti={int(cti_summary.get('docs_written', 0))} docs/"
+                    f"{int(cti_summary.get('buckets_written', 0))} buckets/"
+                    f"{int(cti_summary.get('assessments_total', 0))} assessments"
+                    if cti_summary is not None
+                    else ""
+                ),
             )
         except Exception:
             logger.exception("Metrics rollup failed")
@@ -160,13 +184,19 @@ async def llm_worker_loop() -> None:
     # METRICS_ROLLUP_LEADER=1 on exactly one replica to avoid duplicate
     # rollup writes.  Default is "1" (single-replica backward compat).
     import os
+
     is_rollup_leader = os.getenv("METRICS_ROLLUP_LEADER", "1").strip().lower() in {
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     }
     if is_rollup_leader:
         metrics_task = asyncio.create_task(metrics_rollup_loop(metrics_store))
     else:
-        logger.info("Metrics rollup disabled on this replica (METRICS_ROLLUP_LEADER!=1)")
+        logger.info(
+            "Metrics rollup disabled on this replica (METRICS_ROLLUP_LEADER!=1)"
+        )
         metrics_task = asyncio.create_task(asyncio.sleep(0))  # no-op placeholder
 
     # Semaphore to limit concurrent LLM extractions
@@ -177,7 +207,9 @@ async def llm_worker_loop() -> None:
         async with sem:
             if _shutdown.is_set():
                 try:
-                    await asyncio.to_thread(run_store.update_run_status, run_id, "pending")
+                    await asyncio.to_thread(
+                        run_store.update_run_status, run_id, "pending"
+                    )
                 except Exception:
                     logger.exception(
                         "Shutdown: failed to requeue run %s back to pending", run_id
@@ -193,7 +225,9 @@ async def llm_worker_loop() -> None:
                     settings,
                 )
             except Exception as exc:
-                error_msg = str(exc) if str(exc) else f"{type(exc).__name__} (no detail)"
+                error_msg = (
+                    str(exc) if str(exc) else f"{type(exc).__name__} (no detail)"
+                )
                 try:
                     await asyncio.to_thread(
                         run_store.update_run_status,
@@ -213,9 +247,13 @@ async def llm_worker_loop() -> None:
                 return
 
             try:
-                await asyncio.to_thread(run_store.update_run_status, run_id, "completed")
+                await asyncio.to_thread(
+                    run_store.update_run_status, run_id, "completed"
+                )
             except Exception:
-                logger.exception("Run %s processed but failed to mark completed", run_id)
+                logger.exception(
+                    "Run %s processed but failed to mark completed", run_id
+                )
             else:
                 logger.info("Run %s completed", run_id)
 
@@ -254,9 +292,7 @@ async def llm_worker_loop() -> None:
             if claimed == 0:
                 # No work available, wait before polling again
                 try:
-                    await asyncio.wait_for(
-                        _shutdown.wait(), timeout=poll_interval
-                    )
+                    await asyncio.wait_for(_shutdown.wait(), timeout=poll_interval)
                     break  # shutdown
                 except asyncio.TimeoutError:
                     pass

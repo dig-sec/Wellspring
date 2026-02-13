@@ -55,9 +55,7 @@ async def feedly_worker_loop() -> None:
     _shutdown.clear()
 
     if not settings.elastic_connector_enabled:
-        logger.info(
-            "Feedly worker: disabled (ELASTIC_CONNECTOR_ENABLED=0). Exiting."
-        )
+        logger.info("Feedly worker: disabled (ELASTIC_CONNECTOR_ENABLED=0). Exiting.")
         return
 
     if not settings.elastic_connector_hosts_list:

@@ -28,8 +28,7 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE IF NOT EXISTS entities (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -103,8 +102,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_rel_subject ON relations(subject_id);
         CREATE INDEX IF NOT EXISTS idx_rel_object ON relations(object_id);
         CREATE INDEX IF NOT EXISTS idx_prov_run ON provenance(extraction_run_id);
-        """
-    )
+        """)
     conn.commit()
 
 

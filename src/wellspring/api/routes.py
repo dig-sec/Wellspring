@@ -13,9 +13,9 @@ from ..config import get_settings
 from ..connectors import sync_feedly_index
 from ..elastic_source import ElasticsearchSourceClient, pull_from_elasticsearch
 from ..export import export_csv_zip, export_graphml, export_json, export_markdown
+from ..graph_limits import limit_subgraph
 from ..opencti.client import OpenCTIClient
 from ..opencti.sync import pull_from_opencti
-from ..graph_limits import limit_subgraph
 from ..schemas import (
     ExplainEntityRelation,
     ExplainEntityResponse,
@@ -1658,14 +1658,16 @@ async def trigger_metrics_rollup(
     min_confidence: float = Query(
         default=settings.metrics_rollup_min_confidence, ge=0.0, le=1.0
     ),
+    include_cti: bool = Query(default=True),
     source_uri: Optional[str] = Query(default=None),
 ):
-    """Run daily metrics rollups (threat actors + PIR) in the background."""
+    """Run daily metrics rollups (threat actors + PIR + optional CTI) in background."""
     task = task_manager.create(
         "metrics_rollup",
         {
             "lookback_days": lookback_days,
             "min_confidence": min_confidence,
+            "include_cti": include_cti,
             "source_uri": source_uri,
         },
     )
@@ -1675,23 +1677,58 @@ async def trigger_metrics_rollup(
 
     def _run_sync():
         try:
+            task_manager.update(
+                task.id,
+                status=TaskStatus.RUNNING,
+                progress="Rolling up threat-actor metrics...",
+            )
             threat_actor_summary = metrics_store.rollup_daily_threat_actor_stats(
                 lookback_days=lookback_days,
                 min_confidence=min_confidence,
                 source_uri=source_uri,
+            )
+            task_manager.update(
+                task.id,
+                status=TaskStatus.RUNNING,
+                progress=(
+                    "Threat-actor rollup done "
+                    f"({threat_actor_summary.get('docs_written', 0)} docs). "
+                    "Rolling up PIR metrics..."
+                ),
             )
             pir_summary = metrics_store.rollup_daily_pir_stats(
                 lookback_days=lookback_days,
                 min_confidence=min_confidence,
                 source_uri=source_uri,
             )
+            cti_summary = None
+            cti_rollup_fn = getattr(metrics_store, "rollup_daily_cti_assessments", None)
+            if include_cti and callable(cti_rollup_fn):
+                task_manager.update(
+                    task.id,
+                    status=TaskStatus.RUNNING,
+                    progress=(
+                        "PIR rollup done "
+                        f"({pir_summary.get('docs_written', 0)} docs). "
+                        "Rolling up CTI assessments..."
+                    ),
+                )
+                cti_summary = cti_rollup_fn(
+                    lookback_days=lookback_days,
+                    min_confidence=min_confidence,
+                    source_uri=source_uri,
+                    decay_half_life_days=settings.cti_decay_half_life_days,
+                )
             summary = {
                 "threat_actor": threat_actor_summary,
                 "pir": pir_summary,
                 "lookback_days": lookback_days,
                 "min_confidence": min_confidence,
+                "include_cti": include_cti,
                 "source_uri": source_uri,
             }
+            if cti_summary is not None:
+                summary["cti"] = cti_summary
             task_manager.update(
                 task.id,
                 status=TaskStatus.COMPLETED,
@@ -1699,6 +1736,11 @@ async def trigger_metrics_rollup(
                     "Done: "
                     f"{threat_actor_summary.get('docs_written', 0)} threat-actor docs, "
                     f"{pir_summary.get('docs_written', 0)} PIR docs"
+                    + (
+                        f", {cti_summary.get('docs_written', 0)} CTI docs"
+                        if cti_summary is not None
+                        else ""
+                    )
                 ),
                 detail=summary,
                 finished_at=datetime.utcnow().isoformat(),
@@ -1725,11 +1767,17 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
     """Quick graph stats with throughput."""
     one_hour_ago = datetime.utcnow() - timedelta(hours=1)
     metrics_error = None
+    cti_metrics_error = None
     try:
         metrics = metrics_store.get_rollup_overview(days=30, source_uri=source_uri)
     except Exception as exc:
         metrics = None
         metrics_error = str(exc)
+    try:
+        cti_metrics = metrics_store.get_cti_overview(days=30, source_uri=source_uri)
+    except Exception as exc:
+        cti_metrics = None
+        cti_metrics_error = str(exc)
 
     stale_threshold_seconds = (
         settings.metrics_rollup_stale_seconds
@@ -1739,11 +1787,27 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
     last_rollup_at = (
         metrics.get("last_rollup_at") if isinstance(metrics, dict) else None
     )
+    cti_last_rollup_at = (
+        cti_metrics.get("rollup_last_generated_at")
+        if isinstance(cti_metrics, dict)
+        else None
+    )
     last_rollup_dt = _parse_iso_datetime(last_rollup_at)
+    cti_last_rollup_dt = _parse_iso_datetime(cti_last_rollup_at)
     rollup_age_seconds = None
+    cti_rollup_age_seconds = None
     if last_rollup_dt:
         rollup_age_seconds = max(
             int((datetime.now(timezone.utc) - _to_utc(last_rollup_dt)).total_seconds()),
+            0,
+        )
+    if cti_last_rollup_dt:
+        cti_rollup_age_seconds = max(
+            int(
+                (
+                    datetime.now(timezone.utc) - _to_utc(cti_last_rollup_dt)
+                ).total_seconds()
+            ),
             0,
         )
     is_stale = (
@@ -1752,6 +1816,14 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
         or (
             rollup_age_seconds is not None
             and rollup_age_seconds > stale_threshold_seconds
+        )
+    )
+    cti_is_stale = (
+        cti_metrics is None
+        or not cti_last_rollup_dt
+        or (
+            cti_rollup_age_seconds is not None
+            and cti_rollup_age_seconds > stale_threshold_seconds
         )
     )
 
@@ -1765,6 +1837,7 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
         "runs_failed": run_store.count_runs(status="failed"),
         "rate_per_hour": run_store.count_runs(status="completed", since=one_hour_ago),
         "metrics": metrics,
+        "cti_metrics": cti_metrics,
         "metrics_status": {
             "source_uri": source_uri,
             "last_rollup_at": last_rollup_at,
@@ -1772,6 +1845,14 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
             "stale_threshold_seconds": stale_threshold_seconds,
             "is_stale": is_stale,
             "error": metrics_error,
+        },
+        "cti_metrics_status": {
+            "source_uri": source_uri,
+            "last_rollup_at": cti_last_rollup_at,
+            "rollup_age_seconds": cti_rollup_age_seconds,
+            "stale_threshold_seconds": stale_threshold_seconds,
+            "is_stale": cti_is_stale,
+            "error": cti_metrics_error,
         },
     }
 
@@ -1811,9 +1892,16 @@ def pir_trending(
 
     pir_metrics_fn = getattr(metrics_store, "get_pir_trending_summary", None)
     if callable(pir_metrics_fn):
-        return pir_metrics_fn(**kwargs)
+        result = pir_metrics_fn(**kwargs)
+        # If metrics rollup has data, return it; otherwise fall through to graph store.
+        total_items = sum(
+            len(q.get("items", [])) for q in (result or {}).get("questions", [])
+        )
+        if total_items > 0:
+            return result
 
-    # Fallback for backends that do not implement metrics-backed PIR rollups.
+    # Fallback for backends that do not implement metrics-backed PIR rollups,
+    # or when the metrics store has no rolled-up data yet.
     pir_graph_fn = getattr(graph_store, "get_pir_trending_summary", None)
     if callable(pir_graph_fn):
         return pir_graph_fn(**kwargs)
@@ -1821,6 +1909,56 @@ def pir_trending(
     raise HTTPException(
         status_code=501,
         detail="PIR trending is only available on Elasticsearch backend",
+    )
+
+
+@router.get("/api/cti/overview")
+def cti_overview(
+    days: int = Query(default=30, ge=1, le=3650),
+    source_uri: Optional[str] = Query(default=None),
+    since: Optional[str] = Query(default=None),
+    until: Optional[str] = Query(default=None),
+):
+    """CTI overview from daily precomputed CTI assessment metrics."""
+    since_dt, until_dt = _parse_window_bounds(since, until)
+    overview_fn = getattr(metrics_store, "get_cti_overview", None)
+    if not callable(overview_fn):
+        raise HTTPException(
+            status_code=501,
+            detail="CTI overview is only available on Elasticsearch backend",
+        )
+    return overview_fn(
+        days=days,
+        source_uri=source_uri,
+        since=since_dt,
+        until=until_dt,
+    )
+
+
+@router.get("/api/cti/trends")
+def cti_trends(
+    days: int = Query(default=30, ge=1, le=3650),
+    top_n: int = Query(default=10, ge=1, le=50),
+    group_by: str = Query(default="activity", pattern="^(activity|domain|actor)$"),
+    source_uri: Optional[str] = Query(default=None),
+    since: Optional[str] = Query(default=None),
+    until: Optional[str] = Query(default=None),
+):
+    """CTI trends grouped by activity, domain, or actor."""
+    since_dt, until_dt = _parse_window_bounds(since, until)
+    trends_fn = getattr(metrics_store, "get_cti_trends", None)
+    if not callable(trends_fn):
+        raise HTTPException(
+            status_code=501,
+            detail="CTI trends are only available on Elasticsearch backend",
+        )
+    return trends_fn(
+        days=days,
+        top_n=top_n,
+        group_by=group_by,
+        source_uri=source_uri,
+        since=since_dt,
+        until=until_dt,
     )
 
 

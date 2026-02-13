@@ -45,6 +45,10 @@ class Settings:
     metrics_rollup_stale_seconds: int = int(
         os.getenv("METRICS_ROLLUP_STALE_SECONDS", "0")
     )
+    cti_rollup_enabled: bool = _env_bool("CTI_ROLLUP_ENABLED", "1")
+    cti_rollup_lookback_days: int = int(os.getenv("CTI_ROLLUP_LOOKBACK_DAYS", "365"))
+    cti_decay_half_life_days: int = int(os.getenv("CTI_DECAY_HALF_LIFE_DAYS", "14"))
+    cti_level_thresholds: str = os.getenv("CTI_LEVEL_THRESHOLDS", "0.2,0.4,0.6,0.8")
     opencti_url: str = os.getenv("OPENCTI_URL", "")
     opencti_token: str = os.getenv("OPENCTI_TOKEN", "")
     elastic_connector_enabled: bool = _env_bool(
@@ -130,18 +134,24 @@ class Settings:
 
     # Feedly connector worker
     feedly_worker_interval_minutes: int = int(
-        os.getenv("FEEDLY_WORKER_INTERVAL_MINUTES", os.getenv("SYNC_INTERVAL_MINUTES", "30"))
+        os.getenv(
+            "FEEDLY_WORKER_INTERVAL_MINUTES", os.getenv("SYNC_INTERVAL_MINUTES", "30")
+        )
     )
     feedly_queue_for_llm: bool = _env_bool("FEEDLY_QUEUE_FOR_LLM", "0")
 
     # OpenCTI connector worker
     opencti_worker_interval_minutes: int = int(
-        os.getenv("OPENCTI_WORKER_INTERVAL_MINUTES", os.getenv("SYNC_INTERVAL_MINUTES", "30"))
+        os.getenv(
+            "OPENCTI_WORKER_INTERVAL_MINUTES", os.getenv("SYNC_INTERVAL_MINUTES", "30")
+        )
     )
 
     # Elasticsearch source worker
     elastic_worker_interval_minutes: int = int(
-        os.getenv("ELASTIC_WORKER_INTERVAL_MINUTES", os.getenv("SYNC_INTERVAL_MINUTES", "30"))
+        os.getenv(
+            "ELASTIC_WORKER_INTERVAL_MINUTES", os.getenv("SYNC_INTERVAL_MINUTES", "30")
+        )
     )
     elastic_worker_exclude_indices: str = os.getenv(
         "ELASTIC_WORKER_EXCLUDE_INDICES", "feedly_news"
@@ -210,6 +220,24 @@ class Settings:
     @property
     def watched_folders_list(self) -> List[str]:
         return [d.strip() for d in self.watched_folders.split(",") if d.strip()]
+
+    @property
+    def cti_level_thresholds_list(self) -> List[float]:
+        out: List[float] = []
+        for value in self.cti_level_thresholds.split(","):
+            value = value.strip()
+            if not value:
+                continue
+            try:
+                parsed = float(value)
+            except ValueError:
+                continue
+            if 0.0 <= parsed <= 1.0:
+                out.append(parsed)
+        out = sorted(set(out))
+        if len(out) >= 4:
+            return out[:4]
+        return [0.2, 0.4, 0.6, 0.8]
 
 
 def get_settings() -> Settings:

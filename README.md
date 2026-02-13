@@ -77,6 +77,10 @@ Environment variables:
 - `METRICS_ROLLUP_LOOKBACK_DAYS` (default: `365`)
 - `METRICS_ROLLUP_MIN_CONFIDENCE` (default: `0.0`)
 - `METRICS_ROLLUP_STALE_SECONDS` (default: `0` = auto threshold)
+- `CTI_ROLLUP_ENABLED` (default: `1`)
+- `CTI_ROLLUP_LOOKBACK_DAYS` (default: `365`)
+- `CTI_DECAY_HALF_LIFE_DAYS` (default: `14`)
+- `CTI_LEVEL_THRESHOLDS` (default: `0.2,0.4,0.6,0.8`)
 
 Inference (when enabled) currently applies a simple transitive rule for `is_a` relations within a chunk.
 
@@ -145,11 +149,28 @@ The worker updates this on a schedule, and `/api/stats` exposes freshness and
 active-actor counts for the last 30 days.
 PIR trend summaries are also precomputed daily in this metrics index and served
 by `/api/pir/trending`, avoiding heavy on-demand provenance scans.
+CTI assessment summaries are also precomputed daily and served by:
 
-You can also trigger a manual rollup (threat actors + PIR):
+- `/api/cti/overview`
+- `/api/cti/trends`
+
+You can also trigger a manual rollup (threat actors + PIR + CTI):
 
 ```bash
 curl -X POST "http://localhost:8000/api/metrics/rollup?lookback_days=365&min_confidence=0.2"
+```
+
+Skip CTI in manual rollup when needed:
+
+```bash
+curl -X POST "http://localhost:8000/api/metrics/rollup?include_cti=false"
+```
+
+Query CTI summaries:
+
+```bash
+curl "http://localhost:8000/api/cti/overview?days=30"
+curl "http://localhost:8000/api/cti/trends?days=30&group_by=activity&top_n=10"
 ```
 
 Optionally scope rollups and stats to a source URI:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import ValidationError
 
@@ -116,11 +116,23 @@ def _is_junk_predicate(pred: str) -> bool:
 
 
 # ── Valid entity types (matches prompt) ───────────────────────────
-_VALID_ENTITY_TYPES = frozenset([
-    "threat_actor", "malware", "tool", "vulnerability", "attack_pattern",
-    "campaign", "identity", "infrastructure", "indicator", "location",
-    "report", "mitigation", "topic",
-])
+_VALID_ENTITY_TYPES = frozenset(
+    [
+        "threat_actor",
+        "malware",
+        "tool",
+        "vulnerability",
+        "attack_pattern",
+        "campaign",
+        "identity",
+        "infrastructure",
+        "indicator",
+        "location",
+        "report",
+        "mitigation",
+        "topic",
+    ]
+)
 
 # ── Predicate-to-type inference (fallback when LLM omits types) ──
 _PREDICATE_SUBJECT_TYPE: Dict[str, str] = {
@@ -219,9 +231,11 @@ def extract_triples(raw: str) -> List[Triple]:
             subj_type,
             obj_type,
         )
-        triple = triple.model_copy(update={
-            "subject_type": subj_type,
-            "object_type": obj_type,
-        })
+        triple = triple.model_copy(
+            update={
+                "subject_type": subj_type,
+                "object_type": obj_type,
+            }
+        )
         triples.append(triple)
     return triples

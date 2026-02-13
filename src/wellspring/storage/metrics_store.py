@@ -43,3 +43,37 @@ class MetricsStore(ABC):
         until: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         raise NotImplementedError
+
+    @abstractmethod
+    def rollup_daily_cti_assessments(
+        self,
+        lookback_days: int = 365,
+        min_confidence: float = 0.0,
+        source_uri: Optional[str] = None,
+        decay_half_life_days: int = 14,
+    ) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_cti_overview(
+        self,
+        *,
+        days: int = 30,
+        source_uri: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_cti_trends(
+        self,
+        *,
+        days: int = 30,
+        top_n: int = 10,
+        group_by: str = "activity",
+        source_uri: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        raise NotImplementedError

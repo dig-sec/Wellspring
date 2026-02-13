@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -206,7 +205,9 @@ def explain_entity(
                 }
             )
         except (KeyError, Exception):
-            relations.append({"relation": _relation_dict(edge), "provenance": [], "runs": []})
+            relations.append(
+                {"relation": _relation_dict(edge), "provenance": [], "runs": []}
+            )
 
     return _fmt({"entity": _entity_dict(entity), "relations": relations})
 
@@ -279,8 +280,10 @@ def list_recent_runs(limit: int = 20) -> str:
 
 # ── entrypoint ─────────────────────────────────────────────────────────────
 
+
 def main():
     mcp.run()
+
 
 if __name__ == "__main__":
     main()

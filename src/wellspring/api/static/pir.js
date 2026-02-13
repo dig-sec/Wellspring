@@ -9,6 +9,12 @@ const TYPE_ICONS = {
   infrastructure: '<svg class="pir-q-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1"/><circle cx="6" cy="18" r="1"/></svg>',
 };
 
+/* ── palette for individual entity lines within a card ─── */
+const LINE_PALETTE = [
+  '#2563eb', '#dc2626', '#16a34a', '#ea580c', '#9333ea',
+  '#0891b2', '#ca8a04', '#be185d', '#4f46e5', '#059669',
+];
+
 export function initPIR() {
   const refreshBtn = document.getElementById('pirRefreshBtn');
   const dateFrom   = document.getElementById('pirDateFrom');
@@ -17,24 +23,22 @@ export function initPIR() {
   const list       = document.getElementById('pirList');
   if (!refreshBtn || !dateFrom || !dateTo || !topNInput || !list) return;
 
-  /* Default range: last 7 days */
+  /* Default range: last 30 days */
   const today = new Date();
-  const weekAgo = new Date(today);
-  weekAgo.setDate(today.getDate() - 7);
+  const monthAgo = new Date(today);
+  monthAgo.setDate(today.getDate() - 30);
   dateTo.value = today.toISOString().slice(0, 10);
-  dateFrom.value = weekAgo.toISOString().slice(0, 10);
+  dateFrom.value = monthAgo.toISOString().slice(0, 10);
   dateTo.max = today.toISOString().slice(0, 10);
 
   let loadedOnce = false;
 
   refreshBtn.addEventListener('click', () => void refreshTrending());
 
-  /* Auto-refresh when inputs change */
   dateFrom.addEventListener('change', () => { if (loadedOnce) void refreshTrending(); });
-  dateTo.addEventListener('change', () => { if (loadedOnce) void refreshTrending(); });
+  dateTo.addEventListener('change',   () => { if (loadedOnce) void refreshTrending(); });
   topNInput.addEventListener('change', () => { if (loadedOnce) void refreshTrending(); });
 
-  /* Auto-load on first tab visit */
   const pirTabBtn = document.querySelector('.tab-btn[data-tab="pir"]');
   if (pirTabBtn) {
     pirTabBtn.addEventListener('click', () => {
@@ -44,16 +48,14 @@ export function initPIR() {
 
   /* ── fetch ─────────────────────────────── */
   async function refreshTrending() {
-    /* Send explicit date range so the backend uses the exact window */
-    const sinceStr = dateFrom.value;   /* YYYY-MM-DD */
-    const untilStr = dateTo.value;     /* YYYY-MM-DD */
+    const sinceStr = dateFrom.value;
+    const untilStr = dateTo.value;
     const topN = parseInt(topNInput.value, 10) || 10;
 
     refreshBtn.disabled = true;
     const skeleton = list.querySelector('.pir-skeleton');
     if (skeleton) skeleton.style.display = '';
-    /* hide previous content but keep skeleton */
-    list.querySelectorAll('.pir-question, .pir-banner, .empty-state').forEach(el => el.remove());
+    list.querySelectorAll('.pir-question, .pir-banner, .empty-state, .pir-grid').forEach(el => el.remove());
 
     try {
       const query = new URLSearchParams({ since: sinceStr, until: untilStr, top_n: String(topN) });
@@ -63,328 +65,396 @@ export function initPIR() {
         throw new Error(err.detail || 'PIR request failed');
       }
       const data = await res.json();
-      renderTrending(data);
+      renderPage(data);
       loadedOnce = true;
       toast('PIR trends refreshed', 'success');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'PIR request failed';
       if (skeleton) skeleton.style.display = 'none';
-      list.innerHTML = `<div class="empty-state" style="padding:28px 0"><p>${escapeHtml(message)}</p></div>`;
+      list.innerHTML = '<div class="empty-state" style="padding:28px 0"><p>' + esc(message) + '</p></div>';
       toast(message, 'error');
     } finally {
       refreshBtn.disabled = false;
     }
   }
 
-  /* ── render ────────────────────────────── */
-  function renderTrending(data) {
+  /* ── render full page ──────────────────── */
+  function renderPage(data) {
     const questions = Array.isArray(data?.questions) ? data.questions : [];
-
     if (!questions.length) {
-      list.innerHTML = `<div class="empty-state" style="padding:28px 0"><p>No PIR data available for this window.</p></div>`;
+      list.innerHTML = '<div class="empty-state" style="padding:28px 0"><p>No PIR data available for this window.</p></div>';
       return;
     }
 
     const totalEntities = questions.reduce((s, q) => s + (q.items?.length || 0), 0);
-    const windowLabel   = formatWindow(data.window);
-    const generatedAt   = formatTimeAgo(data.generated_at);
-    const rollupAt      = data.rollup_last_generated_at ? formatTimeAgo(data.rollup_last_generated_at) : '';
-    const statusLine = rollupAt
-      ? `${escapeHtml(windowLabel)} &middot; updated ${escapeHtml(generatedAt)} &middot; rollup ${escapeHtml(rollupAt)}`
-      : `${escapeHtml(windowLabel)} &middot; updated ${escapeHtml(generatedAt)}`;
 
-    list.innerHTML = `
-      <div class="pir-banner">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-        <div class="pir-banner-text">
-          <strong>${totalEntities} trending entit${totalEntities === 1 ? 'y' : 'ies'} across ${questions.length} categories</strong>
-          <span>${statusLine}</span>
-        </div>
-      </div>
-      <div class="pir-grid">
-        ${questions.map(renderCard).join('')}
-      </div>
-    `;
+    list.innerHTML =
+      '<div class="pir-banner">' +
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>' +
+        '<div class="pir-banner-text">' +
+          '<strong>' + totalEntities + ' trending entit' + (totalEntities === 1 ? 'y' : 'ies') + ' across ' + questions.length + ' categories</strong>' +
+          '<span>' + esc(fmtWindow(data.window)) + ' &middot; updated ' + esc(fmtAgo(data.generated_at)) + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="pir-grid">' + questions.map(q => renderCard(q)).join('') + '</div>';
 
-    /* wire up clickable entity names */
-    list.querySelectorAll('[data-entity-id]').forEach(el => {
+    /* Render SVG charts after DOM is ready */
+    const cards = list.querySelectorAll('.pir-card[data-pir-type]');
+    cards.forEach((card, ci) => {
+      const q = questions[ci];
+      if (!q || !q.items?.length) return;
+      const chartEl  = card.querySelector('[data-pir-chart]');
+      const legendEl = card.querySelector('[data-pir-legend]');
+      if (chartEl) renderPIRChart(chartEl, legendEl, q);
+    });
+
+    wireInteractions();
+  }
+
+  /* ── render one PIR card ───────────────── */
+  function renderCard(question) {
+    const items = Array.isArray(question?.items) ? question.items : [];
+    const title = esc(question?.question || 'PIR Question');
+    const type  = String(question?.entity_type || 'unknown');
+    const icon  = TYPE_ICONS[type] || '';
+
+    /* Aggregate stats */
+    const aggDaily = {};
+    for (const item of items) {
+      for (const h of (item.history || [])) {
+        aggDaily[h.bucket_start] = (aggDaily[h.bucket_start] || 0) + (h.evidence_count || 0);
+      }
+    }
+    const dayKeys   = Object.keys(aggDaily).sort();
+    const aggValues = dayKeys.map(d => aggDaily[d]);
+    const totalEvidence = aggValues.reduce((s, v) => s + v, 0);
+
+    let aggTrendHtml = '';
+    if (dayKeys.length >= 4) {
+      const half = Math.floor(dayKeys.length / 2);
+      const first  = aggValues.slice(0, half).reduce((s, v) => s + v, 0);
+      const second = aggValues.slice(half).reduce((s, v) => s + v, 0);
+      const diff = second - first;
+      if (diff > 0) aggTrendHtml = '<span class="pir-trend-badge up">&#9650; +' + fmtInt(diff) + '</span>';
+      else if (diff < 0) aggTrendHtml = '<span class="pir-trend-badge down">&#9660; ' + fmtInt(diff) + '</span>';
+      else aggTrendHtml = '<span class="pir-trend-badge flat">&mdash; 0</span>';
+    }
+
+    return (
+      '<section class="pir-card" data-pir-type="' + escAttr(type) + '">' +
+        '<div class="pir-card-head">' +
+          '<h3>' + icon + title + '</h3>' +
+          '<span>' +
+            '<span class="pir-chip t-' + escAttr(type) + '">' + esc(type.replace(/_/g, ' ')) + '</span>' +
+            '<span class="pir-count-badge">' + items.length + '</span>' +
+          '</span>' +
+        '</div>' +
+        (items.length ? (
+          '<div class="pir-card-stats">' +
+            '<span class="pir-stat-total">' + fmtInt(totalEvidence) + ' total evidence &middot; ' + dayKeys.length + ' days</span>' +
+            aggTrendHtml +
+          '</div>' +
+          '<div class="pir-card-chart" data-pir-chart="' + escAttr(type) + '"></div>' +
+          '<div class="pir-card-legend" data-pir-legend="' + escAttr(type) + '"></div>' +
+          '<div class="pir-items" data-pir-items="' + escAttr(type) + '">' +
+            items.map((item, idx) => renderItem(item, idx)).join('') +
+          '</div>'
+        ) : '<div class="pir-empty">No trending entities in this window.</div>') +
+      '</section>'
+    );
+  }
+
+  /* ── render one entity row ─────────────── */
+  function renderItem(item, index) {
+    const delta   = Number(item?.delta_evidence || 0);
+    const current = Number(item?.current_evidence || 0);
+    const prev    = Number(item?.previous_evidence || 0);
+    const type    = String(item?.type || 'unknown');
+    const name    = item?.name || 'Unknown';
+    const entityId = item?.entity_id || '';
+    const color   = LINE_PALETTE[index % LINE_PALETTE.length];
+    const preds   = Array.isArray(item?.top_predicates) ? item.top_predicates : [];
+
+    let trendClass, trendLabel;
+    if (delta > 0)       { trendClass = 'up';   trendLabel = '&#9650; +' + fmtInt(delta); }
+    else if (delta < 0)  { trendClass = 'down'; trendLabel = '&#9660; '  + fmtInt(delta); }
+    else                 { trendClass = 'flat'; trendLabel = '&mdash; 0'; }
+
+    return (
+      '<article class="pir-item" data-entity-id="' + esc(entityId) + '" data-entity-name="' + esc(name) + '" data-entity-type="' + escAttr(type) + '">' +
+        '<span class="pir-item-color" style="background:' + color + '"></span>' +
+        '<div class="pir-item-body">' +
+          '<div class="pir-item-title">' +
+            '<span class="pir-name">' + esc(name) + '</span>' +
+            '<span class="pir-trend-badge sm ' + trendClass + '">' + trendLabel + '</span>' +
+          '</div>' +
+          '<div class="pir-item-meta">' +
+            '<span>' + fmtInt(current) + ' evidence</span>' +
+            '<span class="pir-item-sep">&middot;</span>' +
+            '<span>was ' + fmtInt(prev) + '</span>' +
+            (preds.length
+              ? '<span class="pir-item-sep">&middot;</span><span>' + preds.slice(0,2).map(p => esc(p.predicate)).join(', ') + '</span>'
+              : '') +
+          '</div>' +
+        '</div>' +
+      '</article>'
+    );
+  }
+
+  /* ── wire interactions ─────────────────── */
+  function wireInteractions() {
+    list.querySelectorAll('.pir-item[data-entity-id]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        const entityId   = el.dataset.entityId;
-        const entityName = el.dataset.entityName;
-        if (!entityId) return;
-        toggleDetail(el, entityId, entityName);
+        toggleDetail(el, el.dataset.entityId, el.dataset.entityName);
       });
     });
   }
 
-  /* ── inline detail drawer ──────────────── */
+  /* ── render multi-line SVG chart per PIR card ── */
+  function renderPIRChart(chartEl, legendEl, question) {
+    const items = question.items || [];
+    if (!items.length) { chartEl.innerHTML = '<div class="pir-chart-empty">No data</div>'; return; }
+
+    const daySet = new Set();
+    for (const item of items) {
+      for (const h of (item.history || [])) daySet.add(h.bucket_start);
+    }
+    const dayKeys = [...daySet].sort();
+    if (!dayKeys.length) { chartEl.innerHTML = '<div class="pir-chart-empty">No history data</div>'; return; }
+
+    /* Per-item daily maps */
+    const series = items.slice(0, 10).map((item, idx) => {
+      const daily = {};
+      for (const h of (item.history || [])) daily[h.bucket_start] = h.evidence_count || 0;
+      return { name: item.name || 'Unknown', color: LINE_PALETTE[idx % LINE_PALETTE.length], daily, total: item.current_evidence || 0 };
+    });
+
+    /* Aggregate per day */
+    const aggDaily = {};
+    for (const item of items) {
+      for (const h of (item.history || [])) aggDaily[h.bucket_start] = (aggDaily[h.bucket_start] || 0) + (h.evidence_count || 0);
+    }
+
+    /* Dimensions */
+    const margin = { top: 16, right: 16, bottom: 36, left: 44 };
+    const chartWidth = Math.max(400, chartEl.clientWidth || 580);
+    const chartHeight = 200;
+    const w = chartWidth - margin.left - margin.right;
+    const h = chartHeight - margin.top - margin.bottom;
+
+    let maxVal = 1;
+    for (const dk of dayKeys) {
+      const agg = aggDaily[dk] || 0;
+      if (agg > maxVal) maxVal = agg;
+    }
+    maxVal = Math.ceil(maxVal * 1.15) || 1;
+
+    const xStep = dayKeys.length > 1 ? w / (dayKeys.length - 1) : 0;
+
+    /* Aggregate area */
+    const aggPts = dayKeys.map((dk, i) => {
+      const x = margin.left + i * xStep;
+      const v = aggDaily[dk] || 0;
+      const y = margin.top + h - (v / maxVal) * h;
+      return { x, y };
+    });
+    const areaPath = 'M' + margin.left + ',' + (margin.top + h) + ' ' +
+      aggPts.map(p => 'L' + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ') +
+      ' L' + (margin.left + (dayKeys.length - 1) * xStep).toFixed(1) + ',' + (margin.top + h) + ' Z';
+    const aggLine = aggPts.map(p => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+
+    /* Entity lines */
+    let linesHtml = '';
+    let dotsHtml = '';
+    for (const s of series) {
+      const pts = [];
+      for (let i = 0; i < dayKeys.length; i++) {
+        const x = margin.left + i * xStep;
+        const v = s.daily[dayKeys[i]] || 0;
+        const y = margin.top + h - (v / maxVal) * h;
+        pts.push(x.toFixed(1) + ',' + y.toFixed(1));
+        if (v > 0) {
+          dotsHtml += '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="2.5" fill="' + s.color + '" opacity="0.7">' +
+            '<title>' + esc(s.name) + ': ' + v + ' on ' + dayKeys[i] + '</title></circle>';
+        }
+      }
+      linesHtml += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + s.color + '" stroke-width="2" stroke-linejoin="round" opacity="0.85"/>';
+    }
+
+    /* Axes */
+    let xLabels = '';
+    const tickInt = Math.max(1, Math.floor(dayKeys.length / 7));
+    for (let i = 0; i < dayKeys.length; i += tickInt) {
+      const x = margin.left + i * xStep;
+      xLabels += '<text x="' + x + '" y="' + (chartHeight - 4) + '" text-anchor="middle" fill="#94a3b8" font-size="10">' + dayKeys[i].slice(5) + '</text>';
+      xLabels += '<line x1="' + x + '" y1="' + margin.top + '" x2="' + x + '" y2="' + (margin.top + h) + '" stroke="#f1f5f9" stroke-width="1"/>';
+    }
+    let yLabels = '';
+    for (let i = 0; i <= 4; i++) {
+      const val = Math.round(maxVal * (i / 4));
+      const y = margin.top + h - (i / 4) * h;
+      yLabels += '<text x="' + (margin.left - 6) + '" y="' + (y + 3) + '" text-anchor="end" fill="#94a3b8" font-size="10">' + val + '</text>';
+      yLabels += '<line x1="' + margin.left + '" y1="' + y + '" x2="' + (margin.left + w) + '" y2="' + y + '" stroke="#f1f5f9" stroke-width="1"/>';
+    }
+
+    chartEl.innerHTML =
+      '<svg width="100%" height="' + chartHeight + '" viewBox="0 0 ' + chartWidth + ' ' + chartHeight + '" preserveAspectRatio="xMidYMid meet">' +
+        yLabels + xLabels +
+        '<path d="' + areaPath + '" fill="#e0e7ff" opacity="0.3"/>' +
+        '<polyline points="' + aggLine + '" fill="none" stroke="#a5b4fc" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.5"/>' +
+        '<line x1="' + margin.left + '" y1="' + (margin.top + h) + '" x2="' + (margin.left + w) + '" y2="' + (margin.top + h) + '" stroke="#e2e8f0" stroke-width="1"/>' +
+        '<line x1="' + margin.left + '" y1="' + margin.top + '" x2="' + margin.left + '" y2="' + (margin.top + h) + '" stroke="#e2e8f0" stroke-width="1"/>' +
+        linesHtml + dotsHtml +
+      '</svg>';
+
+    /* Legend */
+    if (legendEl) {
+      const aggTotal = Object.values(aggDaily).reduce((s, v) => s + v, 0);
+      legendEl.innerHTML =
+        '<span class="pir-legend-item pir-legend-agg">' +
+          '<span class="pir-legend-line"></span>Total (' + fmtInt(aggTotal) + ')' +
+        '</span>' +
+        series.map(s =>
+          '<span class="pir-legend-item">' +
+            '<span class="pir-legend-dot" style="background:' + s.color + '"></span>' +
+            esc(s.name) + ' (' + fmtInt(s.total) + ')' +
+          '</span>'
+        ).join('');
+    }
+  }
+
+  /* ── detail drawer ─────────────────────── */
   async function toggleDetail(itemEl, entityId, entityName) {
-    /* if already open, close it */
     const existing = itemEl.nextElementSibling;
     if (existing?.classList.contains('pir-detail')) {
       existing.remove();
       itemEl.classList.remove('pir-item--active');
       return;
     }
-    /* close any other open detail in same card */
     const card = itemEl.closest('.pir-card');
     card?.querySelectorAll('.pir-detail').forEach(d => d.remove());
     card?.querySelectorAll('.pir-item--active').forEach(i => i.classList.remove('pir-item--active'));
-
     itemEl.classList.add('pir-item--active');
 
-    /* placeholder while loading */
     const drawer = document.createElement('div');
     drawer.className = 'pir-detail';
-    drawer.innerHTML = `<div class="pir-detail-loading">Loading context for ${escapeHtml(entityName)}...</div>`;
+    drawer.innerHTML = '<div class="pir-detail-loading">Loading context for ' + esc(entityName) + '...</div>';
     itemEl.insertAdjacentElement('afterend', drawer);
 
     try {
       const ctxParams = new URLSearchParams({ entity_id: entityId });
       if (dateFrom.value) ctxParams.set('since', dateFrom.value);
       if (dateTo.value)   ctxParams.set('until', dateTo.value);
-      const res = await apiFetch(`/api/pir/entity-context?${ctxParams.toString()}`);
+      const res = await apiFetch('/api/pir/entity-context?' + ctxParams.toString());
       if (!res.ok) throw new Error('Failed to load context');
       const data = await res.json();
-      renderDetail(drawer, data, entityName);
+      renderDetail(drawer, data, entityName, entityId);
     } catch (err) {
-      drawer.innerHTML = `<div class="pir-detail-loading">${escapeHtml(err.message)}</div>`;
+      drawer.innerHTML = '<div class="pir-detail-loading">' + esc(err.message) + '</div>';
     }
   }
 
-  function renderDetail(drawer, data, entityName) {
-    const entity = data.entity || {};
-    const attrs  = entity.attrs || {};
+  function renderDetail(drawer, data, entityName, entityId) {
+    const entity    = data.entity || {};
+    const attrs     = entity.attrs || {};
     const neighbors = data.neighbors || [];
     const sources   = data.sources || [];
 
-    /* Build attribute pills (CVSS, exploit, etc.) */
     let attrHtml = '';
     if (attrs.cvss_score != null) {
-      const severity = attrs.cvss_score >= 9 ? 'critical' : attrs.cvss_score >= 7 ? 'high' : attrs.cvss_score >= 4 ? 'medium' : 'low';
-      attrHtml += `<span class="pir-detail-attr pir-cvss-${severity}">CVSS ${attrs.cvss_score}</span>`;
+      const sev = attrs.cvss_score >= 9 ? 'critical' : attrs.cvss_score >= 7 ? 'high' : attrs.cvss_score >= 4 ? 'medium' : 'low';
+      attrHtml += '<span class="pir-detail-attr pir-cvss-' + sev + '">CVSS ' + attrs.cvss_score + '</span>';
     }
-    if (attrs.has_exploit === true)  attrHtml += `<span class="pir-detail-attr pir-attr-bad">Exploit Available</span>`;
-    if (attrs.has_exploit === false) attrHtml += `<span class="pir-detail-attr pir-attr-ok">No Known Exploit</span>`;
-    if (attrs.has_patch === true)    attrHtml += `<span class="pir-detail-attr pir-attr-ok">Patch Available</span>`;
-    if (attrs.has_patch === false)   attrHtml += `<span class="pir-detail-attr pir-attr-bad">No Patch</span>`;
-    if (attrs.mitre_id)              attrHtml += `<span class="pir-detail-attr">${escapeHtml(attrs.mitre_id)}</span>`;
+    if (attrs.has_exploit === true)  attrHtml += '<span class="pir-detail-attr pir-attr-bad">Exploit Available</span>';
+    if (attrs.has_exploit === false) attrHtml += '<span class="pir-detail-attr pir-attr-ok">No Known Exploit</span>';
+    if (attrs.has_patch === true)    attrHtml += '<span class="pir-detail-attr pir-attr-ok">Patch Available</span>';
+    if (attrs.has_patch === false)   attrHtml += '<span class="pir-detail-attr pir-attr-bad">No Patch</span>';
+    if (attrs.mitre_id)              attrHtml += '<span class="pir-detail-attr">' + esc(attrs.mitre_id) + '</span>';
 
-    /* Group neighbors by predicate */
     const byPred = {};
     for (const n of neighbors) {
-      if (n.type === 'report') continue; /* skip reports, we show source URLs instead */
-      const key = n.predicate;
-      if (!byPred[key]) byPred[key] = [];
-      if (byPred[key].length < 6) byPred[key].push(n);
+      if (n.type === 'report') continue;
+      if (!byPred[n.predicate]) byPred[n.predicate] = [];
+      if (byPred[n.predicate].length < 6) byPred[n.predicate].push(n);
     }
 
     let neighborsHtml = '';
     for (const [pred, items] of Object.entries(byPred)) {
       const pills = items.map(n =>
-        `<span class="pir-detail-entity t-${escapeAttr(n.type)}" data-entity-id="${escapeHtml(n.id)}" data-entity-name="${escapeHtml(n.name)}">
-          <span class="entity-dot t-${escapeAttr(n.type)}"></span>${escapeHtml(n.name)}
-        </span>`
+        '<span class="pir-detail-entity t-' + escAttr(n.type) + '" data-entity-id="' + esc(n.id) + '" data-entity-name="' + esc(n.name) + '">' +
+          '<span class="entity-dot t-' + escAttr(n.type) + '"></span>' + esc(n.name) +
+        '</span>'
       ).join('');
-      neighborsHtml += `<div class="pir-detail-pred-group"><span class="pir-detail-pred-label">${escapeHtml(pred)}</span>${pills}</div>`;
+      neighborsHtml += '<div class="pir-detail-pred-group"><span class="pir-detail-pred-label">' + esc(pred) + '</span>' + pills + '</div>';
     }
 
-    /* Sources as clickable links */
     let sourcesHtml = '';
     if (sources.length) {
-      const sourceItems = sources.slice(0, 10).map(s => {
+      const si = sources.slice(0, 10).map(s => {
         const url = s.uri;
-        const title = s.title || (url.length > 70 ? url.substring(0, 67) + '...' : url);
-        const timeAgo = s.timestamp ? formatTimeAgo(s.timestamp) : '';
-        return `<a class="pir-detail-source" href="${escapeAttr(url)}" target="_blank" rel="noopener">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-          <span>${escapeHtml(title)}</span>
-          ${timeAgo ? `<span class="pir-detail-time">${escapeHtml(timeAgo)}</span>` : ''}
-        </a>`;
+        const t = s.title || (url.length > 70 ? url.substring(0, 67) + '...' : url);
+        const ta = s.timestamp ? fmtAgo(s.timestamp) : '';
+        return '<a class="pir-detail-source" href="' + escAttr(url) + '" target="_blank" rel="noopener">' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +
+          '<span>' + esc(t) + '</span>' +
+          (ta ? '<span class="pir-detail-time">' + esc(ta) + '</span>' : '') +
+        '</a>';
       }).join('');
-      sourcesHtml = `<div class="pir-detail-section"><div class="pir-detail-section-title">Source Articles</div>${sourceItems}</div>`;
+      sourcesHtml = '<div class="pir-detail-section"><div class="pir-detail-section-title">Source Articles</div>' + si + '</div>';
     }
 
-    /* Action buttons */
-    const actionsHtml = `
-      <div class="pir-detail-actions">
-        <button class="btn btn-sm btn-primary pir-detail-viz">Visualize in Graph</button>
-      </div>
-    `;
+    drawer.innerHTML =
+      (attrHtml ? '<div class="pir-detail-attrs">' + attrHtml + '</div>' : '') +
+      (neighborsHtml ? '<div class="pir-detail-section"><div class="pir-detail-section-title">Connected Entities</div>' + neighborsHtml + '</div>' : '') +
+      sourcesHtml +
+      '<div class="pir-detail-actions">' +
+        '<button class="btn btn-sm btn-primary pir-detail-viz">Visualize in Graph</button>' +
+      '</div>';
 
-    drawer.innerHTML = `
-      ${attrHtml ? `<div class="pir-detail-attrs">${attrHtml}</div>` : ''}
-      ${neighborsHtml ? `<div class="pir-detail-section"><div class="pir-detail-section-title">Connected Entities</div>${neighborsHtml}</div>` : ''}
-      ${sourcesHtml}
-      ${actionsHtml}
-    `;
-
-    /* Wire up the visualize button */
     drawer.querySelector('.pir-detail-viz')?.addEventListener('click', (e) => {
       e.stopPropagation();
-      const searchInput   = document.getElementById('searchInput');
-      const entityIdInput = document.getElementById('entityIdInput');
-      const vizBtn        = document.getElementById('vizBtn');
-      if (searchInput) {
+      const si2 = document.getElementById('searchInput');
+      const eid = document.getElementById('entityIdInput');
+      const vb  = document.getElementById('vizBtn');
+      if (si2) {
         document.querySelector('.tab-btn[data-tab="explore"]')?.click();
-        searchInput.value = entityName;
-        if (entityIdInput) entityIdInput.value = data.entity?.id || '';
-        if (vizBtn) setTimeout(() => vizBtn.click(), 350);
+        si2.value = entityName;
+        if (eid) eid.value = data.entity?.id || '';
+        if (vb) setTimeout(() => vb.click(), 350);
       }
     });
 
-    /* Wire up neighbor entity clicks → open their detail */
     drawer.querySelectorAll('.pir-detail-entity').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        const searchInput   = document.getElementById('searchInput');
-        const entityIdInput = document.getElementById('entityIdInput');
-        const vizBtn        = document.getElementById('vizBtn');
-        if (searchInput) {
+        const si3 = document.getElementById('searchInput');
+        const eid2 = document.getElementById('entityIdInput');
+        const vb2  = document.getElementById('vizBtn');
+        if (si3) {
           document.querySelector('.tab-btn[data-tab="explore"]')?.click();
-          searchInput.value = el.dataset.entityName || '';
-          if (entityIdInput) entityIdInput.value = el.dataset.entityId || '';
-          if (vizBtn) setTimeout(() => vizBtn.click(), 350);
+          si3.value = el.dataset.entityName || '';
+          if (eid2) eid2.value = el.dataset.entityId || '';
+          if (vb2) setTimeout(() => vb2.click(), 350);
         }
       });
     });
   }
-
-  function renderCard(question) {
-    const items = Array.isArray(question?.items) ? question.items : [];
-    const title = escapeHtml(question?.question || 'PIR Question');
-    const type  = String(question?.entity_type || 'unknown');
-    const icon  = TYPE_ICONS[type] || '';
-    const maxEvidence = items.reduce((m, i) => Math.max(m, Number(i?.current_evidence || 0)), 1);
-
-    return `
-      <section class="pir-card">
-        <div class="pir-card-head">
-          <h3>${icon}${title}</h3>
-          <span>
-            <span class="pir-chip t-${escapeAttr(type)}">${escapeHtml(type.replace(/_/g, ' '))}</span>
-            <span class="pir-count-badge">${items.length}</span>
-          </span>
-        </div>
-        ${items.length
-          ? `<div class="pir-items">${items.map((item, idx) => renderItem(item, idx, maxEvidence)).join('')}</div>`
-          : '<div class="pir-empty">No trending entities in this window.</div>'
-        }
-      </section>`;
-  }
-
-  function renderItem(item, index, maxEvidence) {
-    const delta      = Number(item?.delta_evidence || 0);
-    const current    = Number(item?.current_evidence || 0);
-    const previous   = Number(item?.previous_evidence || 0);
-    const predicates = Array.isArray(item?.top_predicates) ? item.top_predicates : [];
-    const history    = Array.isArray(item?.history) ? item.history : [];
-    const type       = String(item?.type || 'unknown');
-    const name       = item?.name || 'Unknown';
-    const entityId   = item?.entity_id || '';
-
-    /* trend badge */
-    let trendClass, trendLabel;
-    if (delta > 0) {
-      trendClass = 'up';
-      trendLabel = `▲ +${formatInt(delta)}`;
-    } else if (delta < 0) {
-      trendClass = 'down';
-      trendLabel = `▼ ${formatInt(delta)}`;
-    } else {
-      trendClass = 'flat';
-      trendLabel = '— 0';
-    }
-
-    /* bar width proportional to max */
-    const barPct = maxEvidence ? Math.round((current / maxEvidence) * 100) : 0;
-    const barColor = `var(--c-${type}, #94a3b8)`;
-    const sparkline = renderSparkline(history, type, `${name} activity`);
-
-    return `
-      <article class="pir-item" data-entity-id="${escapeHtml(entityId)}" data-entity-name="${escapeHtml(name)}">
-        <span class="pir-item-rank">${index + 1}</span>
-        <div class="pir-item-body">
-          <div class="pir-item-title">
-            <span class="entity-dot t-${escapeAttr(type)}"></span>
-            <span class="pir-name">${escapeHtml(name)}</span>
-          </div>
-          <div class="pir-sparkrow">
-            <span class="pir-evidence">${formatInt(current)} evidence (was ${formatInt(previous)})</span>
-            <span class="pir-trend-badge ${trendClass}">${trendLabel}</span>
-            ${sparkline}
-            <span class="pir-bar-track"><span class="pir-bar-fill" style="width:${barPct}%;background:${barColor}"></span></span>
-          </div>
-          ${predicates.length
-            ? `<div class="pir-predicates">${predicates.map(p => `<span class="pir-pred">${escapeHtml(String(p.predicate))} ${formatInt(p.count)}</span>`).join('')}</div>`
-            : ''
-          }
-        </div>
-      </article>`;
-  }
 }
 
-function formatInt(value) {
-  const parsed = Number(value || 0);
-  return Number.isFinite(parsed) ? Math.round(parsed).toLocaleString() : '0';
-}
-
-function renderSparkline(history, type, title) {
-  const values = history.map(h => Number(h?.evidence_count || 0));
-  if (!values.length) return '';
-  const w = 84;
-  const h = 20;
-  const maxVal = Math.max(...values, 1);
-  const step = values.length > 1 ? w / (values.length - 1) : 0;
-  const pts = values.map((v, i) => {
-    const x = i * step;
-    const y = h - (v / maxVal) * h;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
-  const stroke = `var(--c-${type}, #64748b)`;
-  return `
-    <svg class="pir-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(title)}">
-      <polyline class="pir-spark-line" points="${pts.join(' ')}" style="stroke:${stroke}"></polyline>
-    </svg>
-  `;
-}
-
-function formatTimeAgo(value) {
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return String(value || '');
-  const diff = Date.now() - dt.getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+/* ── helpers ──────────────────────────────── */
+function fmtInt(v) { const n = Number(v || 0); return Number.isFinite(n) ? Math.round(n).toLocaleString() : '0'; }
+function fmtAgo(v) {
+  const dt = new Date(v); if (Number.isNaN(dt.getTime())) return String(v || '');
+  const m = Math.floor((Date.now() - dt.getTime()) / 60000);
+  if (m < 1) return 'just now'; if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60); if (h < 24) return h + 'h ago';
   return dt.toLocaleDateString();
 }
-
-function formatWindow(windowData) {
-  const days = Number(windowData?.days || 0);
-  const since = formatDate(windowData?.since);
-  const until = formatDate(windowData?.until);
-  if (!since && !until) return `${days || '?'} day window`;
-  return `${days}d window (${since} – ${until})`;
+function fmtWindow(w) {
+  const d = Number(w?.days || 0), s = fmtDate(w?.since), u = fmtDate(w?.until);
+  return (!s && !u) ? (d || '?') + ' day window' : d + 'd window (' + s + ' \u2013 ' + u + ')';
 }
-
-function formatDate(value) {
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return String(value || '');
-  return dt.toLocaleDateString();
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
-function escapeAttr(value) {
-  return String(value).replace(/[^a-zA-Z0-9_-]/g, '_');
-}
+function fmtDate(v) { const dt = new Date(v); return Number.isNaN(dt.getTime()) ? String(v || '') : dt.toLocaleDateString(); }
+function esc(v) { return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'); }
+function escAttr(v) { return String(v).replace(/[^a-zA-Z0-9_-]/g, '_'); }
