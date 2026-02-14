@@ -260,6 +260,7 @@ All persistence is in **Elasticsearch** with indices prefixed by
 | `{prefix}-relations` | Relation documents (subject, predicate, object, confidence) |
 | `{prefix}-provenance` | Provenance records linking relations to source text snippets |
 | `{prefix}-runs` | Extraction run queue (status: pending/running/completed/failed) |
+| `{prefix}-documents` | Raw source documents + normalized `metadata.lake` envelope |
 | `{prefix}-chunks` | Text chunks for completed extraction runs |
 | `{prefix}-metrics-*` | Rollup metrics (threat actor daily stats) |
 | `{prefix}-backfill-checkpoints` | Backfill progress checkpoints |
@@ -277,6 +278,15 @@ recover_stale_runs()→ On startup, resets "running" → "pending" (crash recove
 ```
 
 This eliminates the need for a separate message broker (Redis, RabbitMQ).
+
+Every queued document is normalized into a common lake envelope under
+`metadata.lake`:
+
+1. `source` — canonical source type (`opencti`, `feedly`, `elasticsearch`, `upload`, `file`, ...)
+2. `collection` — source-specific stream/index/type when available
+3. `record_id` — source-native document identifier when available
+4. `source_uri` — original URI used by provenance and chunk IDs
+5. `ingested_at` — UTC ingestion timestamp
 
 ---
 
@@ -365,6 +375,7 @@ The extraction pipeline in `pipeline/runner.py`:
 | DELETE | `/api/runs` | Delete all runs |
 | POST | `/api/recover-stale-runs` | Reset stale runs |
 | GET | `/api/stats` | Graph statistics |
+| GET | `/api/lake/overview` | Elasticsearch-only source/collection lake overview |
 | GET | `/api/data-quality` | Data quality metrics |
 | GET | `/api/tasks` | Background task list |
 | POST | `/api/metrics/rollup` | Trigger metrics rollup |

@@ -33,6 +33,7 @@ class RunStore(ABC):
         """Reset any 'running' runs back to 'pending' (e.g. after a crash)."""
         ...
 
+    @abstractmethod
     def claim_next_run(self) -> Optional[ExtractionRun]:
         raise NotImplementedError
 

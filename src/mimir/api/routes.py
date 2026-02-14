@@ -18,7 +18,7 @@ from ..elastic_source import ElasticsearchSourceClient, pull_from_elasticsearch
 from ..export import export_csv_zip, export_graphml, export_json, export_markdown
 from ..graph_limits import limit_subgraph
 from ..opencti.client import OpenCTIClient
-from ..opencti.sync import pull_from_opencti
+from ..opencti.sync import OPENCTI_DEFAULT_ENTITY_TYPES, pull_from_opencti
 from ..schemas import (
     ExplainEntityRelation,
     ExplainEntityResponse,
@@ -1172,19 +1172,7 @@ def threat_actor_timeline(
 @router.post("/api/opencti/pull")
 async def opencti_pull(
     entity_types: List[str] = Query(
-        default=[
-            "Malware",
-            "Threat-Actor",
-            "Attack-Pattern",
-            "Tool",
-            "Vulnerability",
-            "Campaign",
-            "Intrusion-Set",
-            "Indicator",
-            "Infrastructure",
-            "Course-Of-Action",
-            "Report",
-        ]
+        default=list(OPENCTI_DEFAULT_ENTITY_TYPES)
     ),
     max_per_type: int = Query(
         default=0, ge=0, le=10000, description="0 = fetch all (no limit)"
@@ -1547,19 +1535,7 @@ async def pull_all_sources(
             opencti_result = pull_from_opencti(
                 opencti_client,
                 graph_store,
-                entity_types=[
-                    "Malware",
-                    "Threat-Actor",
-                    "Attack-Pattern",
-                    "Tool",
-                    "Vulnerability",
-                    "Campaign",
-                    "Intrusion-Set",
-                    "Indicator",
-                    "Infrastructure",
-                    "Course-Of-Action",
-                    "Report",
-                ],
+                entity_types=list(OPENCTI_DEFAULT_ENTITY_TYPES),
                 max_per_type=0,
                 run_store=run_store,
                 settings=settings,
@@ -2321,6 +2297,65 @@ def data_quality(
             detail="Data quality summary is only available on Elasticsearch backend",
         )
     return quality_fn(days=days, source_uri=source_uri)
+
+
+@router.get("/api/lake/overview")
+def lake_overview():
+    """Summarize how documents from all connectors are landing in one lake."""
+    run_client = getattr(run_store, "client", None)
+    run_indices = getattr(run_store, "indices", None)
+    if run_client is None or run_indices is None:
+        raise HTTPException(
+            status_code=501,
+            detail="Lake overview is only available on Elasticsearch backend",
+        )
+
+    agg_resp = run_client.search(
+        index=run_indices.documents,
+        size=0,
+        aggs={
+            "sources": {
+                "terms": {
+                    "field": "metadata.lake.source.keyword",
+                    "size": 64,
+                    "missing": "unknown",
+                },
+                "aggs": {
+                    "collections": {
+                        "terms": {
+                            "field": "metadata.lake.collection.keyword",
+                            "size": 256,
+                            "missing": "",
+                        }
+                    }
+                },
+            }
+        },
+    )
+    total_docs = int(
+        run_client.count(index=run_indices.documents, query={"match_all": {}})["count"]
+    )
+    source_rows = []
+    for bucket in agg_resp.get("aggregations", {}).get("sources", {}).get("buckets", []):
+        collections = [
+            {"collection": c.get("key", ""), "docs": int(c.get("doc_count", 0))}
+            for c in bucket.get("collections", {}).get("buckets", [])
+        ]
+        source_rows.append(
+            {
+                "source": str(bucket.get("key", "unknown")),
+                "docs": int(bucket.get("doc_count", 0)),
+                "collections": collections,
+            }
+        )
+    source_rows.sort(key=lambda row: row["docs"], reverse=True)
+
+    return {
+        "backend": "elasticsearch",
+        "exact": True,
+        "documents_total": total_docs,
+        "sources": source_rows,
+    }
 
 
 @router.get("/api/pir/trending")

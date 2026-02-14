@@ -21,7 +21,7 @@ from typing import Optional
 
 from ..config import get_settings
 from ..opencti.client import OpenCTIClient
-from ..opencti.sync import pull_from_opencti
+from ..opencti.sync import OPENCTI_DEFAULT_ENTITY_TYPES, pull_from_opencti
 from ..storage.factory import create_graph_store, create_run_store
 from .heartbeat import WorkerHeartbeat
 
@@ -29,19 +29,7 @@ logger = logging.getLogger(__name__)
 
 _shutdown = asyncio.Event()
 
-DEFAULT_ENTITY_TYPES = [
-    "Malware",
-    "Threat-Actor",
-    "Attack-Pattern",
-    "Tool",
-    "Vulnerability",
-    "Campaign",
-    "Intrusion-Set",
-    "Indicator",
-    "Infrastructure",
-    "Course-Of-Action",
-    "Report",
-]
+DEFAULT_ENTITY_TYPES = list(OPENCTI_DEFAULT_ENTITY_TYPES)
 
 
 def _handle_signal() -> None:

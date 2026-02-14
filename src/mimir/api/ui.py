@@ -354,7 +354,6 @@ def render_root_ui(root_path: str = "", api_base_url: str = "", ollama_model: st
       </div>
       <div class="timeline-panel" id="timelinePanel" style="display:none">
         <div class="timeline-head">
-          <div class="timeline-title" id="timelineTitle">Temporal activity</div>
           <div class="timeline-meta" id="timelineMeta"></div>
         </div>
         <svg id="timelineSvg"></svg>

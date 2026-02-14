@@ -31,6 +31,11 @@ _INLINE = """
                         ... on Indicator { name }
                         ... on Identity { name }
                         ... on CourseOfAction { name }
+                        ... on Country { name }
+                        ... on Region { name }
+                        ... on City { name }
+                        ... on AdministrativeArea { name }
+                        ... on Position { name }
                         ... on Report { name }"""
 
 _QUERY_NAME_MAP = {
@@ -45,6 +50,11 @@ _QUERY_NAME_MAP = {
     "Infrastructure": "infrastructures",
     "Report": "reports",
     "Course-Of-Action": "coursesOfAction",
+    "Country": "countries",
+    "Region": "regions",
+    "City": "cities",
+    "Administrative-Area": "administrativeAreas",
+    "Position": "positions",
 }
 
 
@@ -241,7 +251,12 @@ class OpenCTIClient:
                           ... on Infrastructure { name }
                           ... on Indicator { name }
                           ... on Identity { name }
-                          ... on CourseOfAction { name }"""
+                          ... on CourseOfAction { name }
+                          ... on Country { name }
+                          ... on Region { name }
+                          ... on City { name }
+                          ... on AdministrativeArea { name }
+                          ... on Position { name }"""
 
         cursor: Optional[str] = None
         total = 0
@@ -287,6 +302,11 @@ class OpenCTIClient:
                           ... on Indicator {{ name }}
                           ... on Identity {{ name }}
                           ... on CourseOfAction {{ name }}
+                          ... on Country {{ name }}
+                          ... on Region {{ name }}
+                          ... on City {{ name }}
+                          ... on AdministrativeArea {{ name }}
+                          ... on Position {{ name }}
                           ... on StixCoreRelationship {{
                             id
                             relationship_type

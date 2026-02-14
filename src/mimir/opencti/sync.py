@@ -56,8 +56,34 @@ _TYPE_MAP: Dict[str, str] = {
     "Indicator": "indicator",
     "Infrastructure": "infrastructure",
     "Course-Of-Action": "mitigation",
+    "Country": "location",
+    "Region": "location",
+    "City": "location",
+    "Administrative-Area": "location",
+    "Administrative Area": "location",
+    "Position": "location",
+    "Location": "location",
     "Report": "report",
 }
+
+OPENCTI_DEFAULT_ENTITY_TYPES: List[str] = [
+    "Malware",
+    "Threat-Actor",
+    "Attack-Pattern",
+    "Tool",
+    "Vulnerability",
+    "Campaign",
+    "Intrusion-Set",
+    "Indicator",
+    "Infrastructure",
+    "Course-Of-Action",
+    "Country",
+    "Region",
+    "City",
+    "Administrative-Area",
+    "Position",
+    "Report",
+]
 
 
 @dataclass

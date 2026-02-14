@@ -19,6 +19,7 @@ from elasticsearch import (
 )
 from elasticsearch.helpers import bulk as es_bulk
 
+from ..lake import build_lake_metadata
 from ..normalize import canonical_entity_key
 from ..schemas import (
     Chunk,
@@ -1542,6 +1543,11 @@ class ElasticRunStore(_ElasticBase, RunStore):
         text: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
+        normalized_metadata = build_lake_metadata(
+            source_uri,
+            metadata,
+            ingested_at=run.started_at,
+        )
         self.client.index(
             index=self.indices.runs,
             id=run.run_id,
@@ -1562,7 +1568,7 @@ class ElasticRunStore(_ElasticBase, RunStore):
             document={
                 "source_uri": source_uri,
                 "text": text,
-                "metadata": metadata or {},
+                "metadata": normalized_metadata,
             },
             refresh="wait_for",
         )

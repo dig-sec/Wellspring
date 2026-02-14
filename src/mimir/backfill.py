@@ -291,7 +291,7 @@ def backfill_opencti(
 ) -> Dict[str, Any]:
     """Pull ALL entities/reports from OpenCTI (full dump)."""
     from .opencti.client import OpenCTIClient
-    from .opencti.sync import pull_from_opencti
+    from .opencti.sync import OPENCTI_DEFAULT_ENTITY_TYPES, pull_from_opencti
 
     source_key = "opencti"
 
@@ -311,19 +311,7 @@ def backfill_opencti(
         result = pull_from_opencti(
             client,
             graph_store,
-            entity_types=[
-                "Malware",
-                "Threat-Actor",
-                "Attack-Pattern",
-                "Tool",
-                "Vulnerability",
-                "Campaign",
-                "Intrusion-Set",
-                "Indicator",
-                "Infrastructure",
-                "Course-Of-Action",
-                "Report",
-            ],
+            entity_types=list(OPENCTI_DEFAULT_ENTITY_TYPES),
             max_per_type=0,  # unlimited
             run_store=run_store,
             settings=settings,

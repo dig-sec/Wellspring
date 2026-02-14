@@ -488,14 +488,12 @@ async function loadTimeline(seedName, { seedId, depth, minConf, since, until, in
 function renderTimeline(data) {
   timelineData = data;
   const panel = document.getElementById('timelinePanel');
-  const title = document.getElementById('timelineTitle');
   const meta = document.getElementById('timelineMeta');
   const svgEl = document.getElementById('timelineSvg');
   const empty = document.getElementById('timelineEmpty');
-  if (!panel || !title || !meta || !svgEl || !empty) return;
+  if (!panel || !meta || !svgEl || !empty) return;
 
   panel.style.display = 'block';
-  title.textContent = `Temporal activity: ${data.entity?.name || 'entity'}`;
   meta.textContent = `${data.interval} buckets · depth ${data.depth} · ${data.bucket_count} points`;
 
   const buckets = Array.isArray(data.buckets) ? data.buckets : [];
