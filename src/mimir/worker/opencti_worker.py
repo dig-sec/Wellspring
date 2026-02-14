@@ -122,6 +122,13 @@ async def opencti_worker_loop() -> None:
         client = None
         try:
             client = OpenCTIClient(settings.opencti_url, settings.opencti_token)
+
+            def _progress(msg: str) -> None:
+                heartbeat.update(
+                    "running",
+                    {"cycle_started_at": cycle_started_at, "progress": msg[:200]},
+                )
+
             result = await asyncio.to_thread(
                 pull_from_opencti,
                 client,
@@ -130,6 +137,7 @@ async def opencti_worker_loop() -> None:
                 max_per_type=0,
                 run_store=run_store,
                 settings=settings,
+                progress_cb=_progress,
             )
             logger.info(
                 "OpenCTI sync done: %d entities, %d relations",

@@ -177,7 +177,7 @@ class Settings:
         )
     )
     malware_worker_indices: str = os.getenv(
-        "MALWARE_WORKER_INDICES", "mwdb-openrelik,dailymalwarefeed"
+        "MALWARE_WORKER_INDICES", "mwdb-openrelik,dailymalwarefeed-*"
     )
     malware_worker_lookback_minutes: int = int(
         os.getenv("MALWARE_WORKER_LOOKBACK_MINUTES", "180")

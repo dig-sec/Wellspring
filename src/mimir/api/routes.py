@@ -2096,6 +2096,35 @@ async def trigger_metrics_rollup(
     return {"task_id": task.id, "status": "running"}
 
 
+def _build_cti_summary(
+    cti_metrics: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Attach a ``summary`` sub-dict expected by the status-page JS."""
+    if not isinstance(cti_metrics, dict):
+        return cti_metrics
+
+    top = cti_metrics.get("top_assessments") or []
+    active_actors = sum(
+        1 for a in top if a.get("entity_type") == "threat_actor"
+    )
+    active_malware = sum(
+        1 for a in top if a.get("entity_type") == "malware"
+    )
+
+    level_dist = cti_metrics.get("level_distribution") or {}
+    total_docs = sum(int(v) for v in level_dist.values())
+    weighted = sum(int(k) * int(v) for k, v in level_dist.items())
+    avg_threat_level = round(weighted / total_docs, 1) if total_docs > 0 else None
+
+    cti_metrics["summary"] = {
+        "total_assessments": cti_metrics.get("assessments_total") or 0,
+        "active_threat_actors": active_actors,
+        "active_malware": active_malware,
+        "avg_threat_level": avg_threat_level,
+    }
+    return cti_metrics
+
+
 @router.get("/api/stats")
 def get_stats(source_uri: Optional[str] = Query(default=None)):
     """Quick graph stats with throughput."""
@@ -2247,7 +2276,7 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
         "runs_failed": run_store.count_runs(status="failed"),
         "rate_per_hour": run_store.count_runs(status="completed", since=one_hour_ago),
         "metrics": metrics,
-        "cti_metrics": cti_metrics,
+        "cti_metrics": _build_cti_summary(cti_metrics),
         "metrics_status": {
             "source_uri": source_uri,
             "last_rollup_at": last_rollup_at,
