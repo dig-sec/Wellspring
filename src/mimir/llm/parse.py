@@ -131,6 +131,15 @@ _VALID_ENTITY_TYPES = frozenset(
         "report",
         "mitigation",
         "topic",
+        "malware_sample",
+        "capa_rule",
+        "capa_behavior",
+        "yara_rule",
+        "tactic",
+        "sector",
+        "service",
+        "credential",
+        "artifact",
     ]
 )
 
@@ -158,7 +167,7 @@ _PREDICATE_OBJECT_TYPE: Dict[str, str] = {
     "uses_technique": "attack_pattern",
     "employs_tool": "tool",
     "exploits_vulnerability": "vulnerability",
-    "targets_sector": "identity",
+    "targets_sector": "sector",
     "is_attributed_to": "threat_actor",
     "attributed_to": "threat_actor",
     "drops": "malware",

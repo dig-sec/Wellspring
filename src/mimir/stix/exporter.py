@@ -18,8 +18,13 @@ _ENTITY_TYPE_TO_SDO: Dict[str, str] = {
     "malware": "malware",
     "tool": "tool",
     "attack_pattern": "attack-pattern",
+    "capa_behavior": "attack-pattern",  # CAPA/MBC behavior category
     "campaign": "campaign",
     "vulnerability": "vulnerability",
+    "sector": "identity",
+    "service": "infrastructure",
+    "credential": "indicator",
+    "artifact": "indicator",
     "mitigation": "course-of-action",
     "identity": "identity",
     "indicator": "indicator",

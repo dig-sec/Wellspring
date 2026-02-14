@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, TypeVar
@@ -16,6 +17,7 @@ from elasticsearch import (
     Elasticsearch,
     NotFoundError,
 )
+from elasticsearch.helpers import bulk as es_bulk
 
 from ..normalize import canonical_entity_key
 from ..schemas import (
@@ -39,6 +41,7 @@ _NS_ENTITY = UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 _NS_RELATION = UUID("b2c3d4e5-f6a7-8901-bcde-f12345678901")
 
 T = TypeVar("T")
+_COMPACT_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _parse_datetime(value: Any) -> datetime:
@@ -72,6 +75,10 @@ def _merge_attrs(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str
         else:
             merged[key] = value
     return merged
+
+
+def _compact_text(value: str) -> str:
+    return _COMPACT_RE.sub("", str(value or "").lower())
 
 
 def _entity_keys(
@@ -325,8 +332,10 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
             self.indices.entities,
             {
                 "name": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                "name_compact": {"type": "keyword"},
                 "type": {"type": "keyword"},
                 "aliases": {"type": "keyword"},
+                "aliases_compact": {"type": "keyword"},
                 "attrs": {
                     "type": "object",
                     "properties": {
@@ -489,10 +498,19 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
             merged_aliases = sorted(merged_aliases_set)
 
             keys = _entity_keys(entity.name, entity.type, merged_aliases)
+            aliases_compact = sorted(
+                {
+                    compact
+                    for compact in (_compact_text(alias) for alias in merged_aliases)
+                    if compact
+                }
+            )
             doc = {
                 "name": entity.name,
+                "name_compact": _compact_text(entity.name),
                 "type": entity.type,
                 "aliases": merged_aliases,
+                "aliases_compact": aliases_compact,
                 "attrs": merged_attrs,
                 "canonical_key": canonical,
                 "keys": keys,
@@ -645,6 +663,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
         normalized_query = query.strip()
         if not normalized_query:
             return []
+        compact_query = _compact_text(normalized_query)
         wildcard_value = (
             normalized_query.replace("\\", "\\\\")
             .replace("*", "\\*")
@@ -670,6 +689,14 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
                     }
                 },
                 {
+                    "wildcard": {
+                        "aliases": {
+                            "value": wildcard_value,
+                            "case_insensitive": True,
+                        }
+                    }
+                },
+                {
                     "match": {
                         "name": {
                             "query": normalized_query,
@@ -677,8 +704,51 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
                         }
                     }
                 },
+                {
+                    "match": {
+                        "name": {
+                            "query": normalized_query,
+                            "operator": "and",
+                            "fuzziness": "AUTO",
+                            "prefix_length": 1,
+                        }
+                    }
+                },
             ]
         }
+        if compact_query:
+            compact_wildcard = compact_query + "*"
+            bool_query["should"].extend(
+                [
+                    # Backward-compatible fallback for older entity docs that
+                    # predate name_compact/aliases_compact fields.
+                    {
+                        "wildcard": {
+                            "name.keyword": {
+                                "value": compact_wildcard,
+                                "case_insensitive": True,
+                            }
+                        }
+                    },
+                    {"term": {"name_compact": compact_query}},
+                    {
+                        "wildcard": {
+                            "name_compact": {
+                                "value": compact_wildcard,
+                                "case_insensitive": True,
+                            }
+                        }
+                    },
+                    {
+                        "wildcard": {
+                            "aliases_compact": {
+                                "value": compact_wildcard,
+                                "case_insensitive": True,
+                            }
+                        }
+                    },
+                ]
+            )
         bool_query["minimum_should_match"] = 1
         if entity_type:
             bool_query["filter"] = [{"term": {"type": entity_type}}]
@@ -727,10 +797,10 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
         for i in range(0, len(relation_id_list), chunk_size):
             id_chunk = relation_id_list[i : i + chunk_size]
             filters: List[Dict[str, Any]] = [
-                {"terms": {"relation_id.keyword": id_chunk}}
+                {"terms": {"relation_id": id_chunk}}
             ]
             if source_uri:
-                filters.append({"term": {"source_uri.keyword": source_uri}})
+                filters.append({"term": {"source_uri": source_uri}})
             if since_value or until_value:
                 range_filter: Dict[str, Any] = {}
                 if since_value:
@@ -896,7 +966,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
         mapping_hits = list(
             self._iter_search_hits(
                 self.indices.relation_provenance,
-                query={"term": {"relation_id.keyword": relation_id}},
+                query={"term": {"relation_id": relation_id}},
                 sort=[{"timestamp": "desc"}, {"_id": "asc"}],
             )
         )
@@ -959,7 +1029,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
             }
         ]
         if source_uri:
-            filters.append({"term": {"source_uri.keyword": source_uri}})
+            filters.append({"term": {"source_uri": source_uri}})
 
         counts: Counter[str] = Counter()
         # Use terms aggregation – top N relation_ids by doc count (single request)
@@ -970,7 +1040,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
             aggs={
                 "by_relation": {
                     "terms": {
-                        "field": "relation_id.keyword",
+                        "field": "relation_id",
                         "size": max_buckets,
                     }
                 }
@@ -1011,7 +1081,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
             }
         ]
         if source_uri:
-            filters.append({"term": {"source_uri.keyword": source_uri}})
+            filters.append({"term": {"source_uri": source_uri}})
 
         # Step 1: Get top relation_ids by count (no sub-agg)
         response = self.client.search(
@@ -1021,7 +1091,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
             aggs={
                 "by_relation": {
                     "terms": {
-                        "field": "relation_id.keyword",
+                        "field": "relation_id",
                         "size": max_buckets,
                     }
                 }
@@ -1045,7 +1115,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
         chunk_size = 500  # keep sub-agg bucket count manageable
         for i in range(0, len(rel_ids), chunk_size):
             chunk = rel_ids[i : i + chunk_size]
-            daily_filters = list(filters) + [{"terms": {"relation_id.keyword": chunk}}]
+            daily_filters = list(filters) + [{"terms": {"relation_id": chunk}}]
             daily_response = self.client.search(
                 index=self.indices.relation_provenance,
                 query={"bool": {"filter": daily_filters}},
@@ -1053,7 +1123,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
                 aggs={
                     "by_relation": {
                         "terms": {
-                            "field": "relation_id.keyword",
+                            "field": "relation_id",
                             "size": len(chunk),
                         },
                         "aggs": {
@@ -1295,7 +1365,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
 
         scope_filters: List[Dict[str, Any]] = []
         if source_uri:
-            scope_filters.append({"term": {"source_uri.keyword": source_uri}})
+            scope_filters.append({"term": {"source_uri": source_uri}})
 
         window_filters = list(scope_filters)
         window_filters.append({"range": {"timestamp": {"gte": since.isoformat()}}})
@@ -1314,11 +1384,11 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
             aggs={
                 "active_relations": {
                     "cardinality": {
-                        "field": "relation_id.keyword",
+                        "field": "relation_id",
                         "precision_threshold": 40000,
                     }
                 },
-                "sources": {"cardinality": {"field": "source_uri.keyword"}},
+                "sources": {"cardinality": {"field": "source_uri"}},
                 "latest_event": {"max": {"field": "timestamp"}},
                 "earliest_event": {"min": {"field": "timestamp"}},
             },
@@ -1331,7 +1401,7 @@ class ElasticGraphStore(_ElasticBase, GraphStore):
             aggs={
                 "relations_with_evidence": {
                     "cardinality": {
-                        "field": "relation_id.keyword",
+                        "field": "relation_id",
                         "precision_threshold": 40000,
                     }
                 }
@@ -2090,11 +2160,11 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
         for i in range(0, len(relation_ids), relation_chunk_size):
             relation_chunk = relation_ids[i : i + relation_chunk_size]
             filters: List[Dict[str, Any]] = [
-                {"terms": {"relation_id.keyword": relation_chunk}},
+                {"terms": {"relation_id": relation_chunk}},
                 {"range": {"timestamp": {"gte": since.isoformat()}}},
             ]
             if source_uri:
-                filters.append({"term": {"source_uri.keyword": source_uri}})
+                filters.append({"term": {"source_uri": source_uri}})
             query = {"bool": {"filter": filters}}
             for hit in self._iter_search_hits(
                 self.indices.relation_provenance,
@@ -2133,6 +2203,7 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
         first_bucket: Optional[datetime] = None
         last_bucket: Optional[datetime] = None
 
+        bulk_actions: List[Dict[str, Any]] = []
         for (actor_id, bucket_day), data in buckets.items():
             if first_bucket is None or bucket_day < first_bucket:
                 first_bucket = bucket_day
@@ -2147,10 +2218,11 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
                 f"{self.METRIC_TYPE_DAILY_THREAT_ACTOR}:"
                 f"{scope}:{bucket_day.date().isoformat()}:{actor_id}"
             )
-            self.client.index(
-                index=self.indices.metrics,
-                id=doc_id,
-                document={
+            bulk_actions.append({
+                "_op_type": "index",
+                "_index": self.indices.metrics,
+                "_id": doc_id,
+                "_source": {
                     "metric_type": self.METRIC_TYPE_DAILY_THREAT_ACTOR,
                     "source_scope": scope,
                     "bucket_start": bucket_day.isoformat(),
@@ -2165,9 +2237,11 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
                     "min_confidence": min_confidence,
                     "rollup_generated_at": generated_at,
                 },
-                refresh=False,
-            )
-            docs_written += 1
+            })
+
+        if bulk_actions:
+            success, _ = es_bulk(self.client, bulk_actions, raise_on_error=False)
+            docs_written = success
 
         self.client.indices.refresh(index=self.indices.metrics)
 
@@ -2304,11 +2378,11 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
         for i in range(0, len(relation_ids), relation_chunk_size):
             relation_chunk = relation_ids[i : i + relation_chunk_size]
             filters: List[Dict[str, Any]] = [
-                {"terms": {"relation_id.keyword": relation_chunk}},
+                {"terms": {"relation_id": relation_chunk}},
                 {"range": {"timestamp": {"gte": since.isoformat()}}},
             ]
             if source_uri:
-                filters.append({"term": {"source_uri.keyword": source_uri}})
+                filters.append({"term": {"source_uri": source_uri}})
             query = {"bool": {"filter": filters}}
             for hit in self._iter_search_hits(
                 self.indices.relation_provenance,
@@ -2341,6 +2415,7 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
         first_bucket: Optional[datetime] = None
         last_bucket: Optional[datetime] = None
 
+        bulk_actions: List[Dict[str, Any]] = []
         for (entity_id, bucket_day), data in buckets.items():
             if first_bucket is None or bucket_day < first_bucket:
                 first_bucket = bucket_day
@@ -2356,10 +2431,11 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
                 f"{self.METRIC_TYPE_DAILY_PIR_ENTITY}:"
                 f"{scope}:{bucket_day.date().isoformat()}:{entity_id}"
             )
-            self.client.index(
-                index=self.indices.metrics,
-                id=doc_id,
-                document={
+            bulk_actions.append({
+                "_op_type": "index",
+                "_index": self.indices.metrics,
+                "_id": doc_id,
+                "_source": {
                     "metric_type": self.METRIC_TYPE_DAILY_PIR_ENTITY,
                     "source_scope": scope,
                     "bucket_start": bucket_day.isoformat(),
@@ -2373,9 +2449,11 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
                     "min_confidence": min_confidence,
                     "rollup_generated_at": generated_at,
                 },
-                refresh=False,
-            )
-            docs_written += 1
+            })
+
+        if bulk_actions:
+            success, _ = es_bulk(self.client, bulk_actions, raise_on_error=False)
+            docs_written = success
 
         self.client.indices.refresh(index=self.indices.metrics)
 
@@ -2454,6 +2532,7 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
         assessment_ids: set[str] = set()
         latest_pir_rollup_at: Optional[str] = None
         generated_at = now.isoformat()
+        bulk_actions: List[Dict[str, Any]] = []
 
         for hit in pir_docs:
             source = hit.get("_source") or {}
@@ -2579,10 +2658,11 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
                 f"{self.METRIC_TYPE_DAILY_CTI_ASSESSMENT}:"
                 f"{scope}:{bucket_day.date().isoformat()}:{assessment_id}"
             )
-            self.client.index(
-                index=self.indices.metrics,
-                id=doc_id,
-                document={
+            bulk_actions.append({
+                "_op_type": "index",
+                "_index": self.indices.metrics,
+                "_id": doc_id,
+                "_source": {
                     "metric_type": self.METRIC_TYPE_DAILY_CTI_ASSESSMENT,
                     "source_scope": scope,
                     "bucket_start": bucket_day.isoformat(),
@@ -2621,9 +2701,7 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
                     "decay_half_life_days": decay_half_life_days,
                     "rollup_generated_at": generated_at,
                 },
-                refresh=False,
-            )
-            docs_written += 1
+            })
             assessment_ids.add(assessment_id)
 
             pir_rollup_at = source.get("rollup_generated_at")
@@ -2632,6 +2710,10 @@ class ElasticMetricsStore(_ElasticBase, MetricsStore):
                 or str(pir_rollup_at) > str(latest_pir_rollup_at)
             ):
                 latest_pir_rollup_at = str(pir_rollup_at)
+
+        if bulk_actions:
+            success, _ = es_bulk(self.client, bulk_actions, raise_on_error=False)
+            docs_written = success
 
         self.client.indices.refresh(index=self.indices.metrics)
         return {

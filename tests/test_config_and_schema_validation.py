@@ -15,6 +15,13 @@ def test_validate_settings_rejects_short_search_query_max_length():
         validate_settings(settings)
 
 
+@pytest.mark.parametrize("confidence", [-0.01, 1.01])
+def test_validate_settings_rejects_out_of_range_aikg_confidence(confidence: float):
+    settings = replace(get_settings(), aikg_import_min_inferred_confidence=confidence)
+    with pytest.raises(ValueError, match="AIKG_IMPORT_MIN_INFERRED_CONFIDENCE"):
+        validate_settings(settings)
+
+
 def test_query_request_depth_bounds():
     QueryRequest(depth=0)
     QueryRequest(depth=5)

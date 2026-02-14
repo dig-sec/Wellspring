@@ -39,6 +39,17 @@ const TYPE_COLORS = {
   mitigation: '#22c55e',
   report: '#64748b',
   identity: '#0ea5e9',
+  location: '#6b7280',
+  topic: '#94a3b8',
+  malware_sample: '#dc2626',
+  capa_rule: '#16a34a',
+  capa_behavior: '#0d9488',
+  yara_rule: '#06b6d4',
+  tactic: '#7c3aed',
+  sector: '#b45309',
+  service: '#0284c7',
+  credential: '#9333ea',
+  artifact: '#4b5563',
 };
 function nodeColor(d) { return TYPE_COLORS[d.type] || '#9ca3af'; }
 
@@ -906,11 +917,7 @@ function renderGraph(data) {
 }
 
 /* ── sidebar type toggles ──────────────── */
-const ALL_ENTITY_TYPES = [
-  'threat_actor', 'malware', 'vulnerability', 'attack_pattern',
-  'campaign', 'tool', 'indicator', 'infrastructure',
-  'identity', 'mitigation', 'report',
-];
+const ALL_ENTITY_TYPES = Object.keys(TYPE_COLORS);
 
 function initTypeToggles() {
   const list = document.getElementById('typeToggleList');

@@ -28,26 +28,31 @@ async def _metrics_rollup_loop() -> None:
         return
 
     logger.info("Metrics auto-rollup started (every %ds)", interval)
+    # Short initial delay so the API is fully ready, then run immediately
+    await asyncio.sleep(10)
     while True:
-        await asyncio.sleep(interval)
         try:
-            metrics_store.rollup_daily_threat_actor_stats(
+            await asyncio.to_thread(
+                metrics_store.rollup_daily_threat_actor_stats,
                 lookback_days=settings.metrics_rollup_lookback_days,
                 min_confidence=settings.metrics_rollup_min_confidence,
             )
-            metrics_store.rollup_daily_pir_stats(
+            await asyncio.to_thread(
+                metrics_store.rollup_daily_pir_stats,
                 lookback_days=settings.metrics_rollup_lookback_days,
                 min_confidence=settings.metrics_rollup_min_confidence,
             )
             cti_fn = getattr(metrics_store, "rollup_daily_cti_assessments", None)
             if cti_fn:
-                cti_fn(
+                await asyncio.to_thread(
+                    cti_fn,
                     lookback_days=settings.metrics_rollup_lookback_days,
                     min_confidence=settings.metrics_rollup_min_confidence,
                 )
             logger.info("Metrics auto-rollup completed.")
         except Exception:
             logger.exception("Metrics auto-rollup failed")
+        await asyncio.sleep(interval)
 
 
 @asynccontextmanager

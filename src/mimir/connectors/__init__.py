@@ -687,7 +687,7 @@ def _process_article(
             predicate="mentions",
             object_id=entity.id,
             confidence=confidence,
-            attrs={"origin": "feedly", "salience": salience},
+            attrs={"origin": "feedly", "salience": confidence},
         )
         stored = graph_store.upsert_relations([rel])[0]
         chunk_id = str(fe.get("id", stored.id))

@@ -29,7 +29,16 @@ def test_search_entities_uses_safe_prefix_wildcard_query():
     assert len(client.calls) == 1
     request = client.calls[0]
     bool_query = request["query"]["bool"]
-    wildcard_value = bool_query["should"][1]["wildcard"]["name.keyword"]["value"]
+    wildcard_clauses = [
+        clause["wildcard"] for clause in bool_query["should"] if "wildcard" in clause
+    ]
+    name_wildcard = next(
+        wildcard for wildcard in wildcard_clauses if "name.keyword" in wildcard
+    )
+    alias_wildcard = next(
+        wildcard for wildcard in wildcard_clauses if "aliases" in wildcard
+    )
+    wildcard_value = name_wildcard["name.keyword"]["value"]
 
     assert request["size"] == 50
     assert bool_query["minimum_should_match"] == 1
@@ -38,6 +47,7 @@ def test_search_entities_uses_safe_prefix_wildcard_query():
     assert not wildcard_value.startswith("*")
     assert "\\?" in wildcard_value
     assert "\\*" in wildcard_value
+    assert alias_wildcard["aliases"]["value"] == wildcard_value
 
 
 def test_search_entities_uses_canonical_key_filter_path():
@@ -71,3 +81,47 @@ def test_search_entities_skips_blank_query():
 
     assert result == []
     assert client.calls == []
+
+
+def test_search_entities_adds_fuzzy_and_compact_clauses():
+    client = _FakeClient()
+    store = _make_store(client)
+
+    result = store.search_entities("Dyno-Wiper")
+
+    assert result == []
+    assert len(client.calls) == 1
+    bool_query = client.calls[0]["query"]["bool"]
+    should_clauses = bool_query["should"]
+
+    # Fuzzy match clause for typo-tolerant lookup.
+    fuzzy_match = next(
+        (
+            clause["match"]["name"]
+            for clause in should_clauses
+            if "match" in clause
+            and "name" in clause["match"]
+            and isinstance(clause["match"]["name"], dict)
+            and clause["match"]["name"].get("fuzziness") == "AUTO"
+        ),
+        None,
+    )
+    assert fuzzy_match is not None
+    assert fuzzy_match["prefix_length"] == 1
+
+    # Compact lookup clauses bridge punctuation differences.
+    assert {"term": {"name_compact": "dynowiper"}} in should_clauses
+    keyword_wildcards = [
+        clause["wildcard"]
+        for clause in should_clauses
+        if "wildcard" in clause and "name.keyword" in clause["wildcard"]
+    ]
+    assert keyword_wildcards
+    assert keyword_wildcards[-1]["name.keyword"]["value"] == "dynowiper*"
+    compact_wildcards = [
+        clause["wildcard"]
+        for clause in should_clauses
+        if "wildcard" in clause and "name_compact" in clause["wildcard"]
+    ]
+    assert compact_wildcards
+    assert compact_wildcards[0]["name_compact"]["value"] == "dynowiper*"

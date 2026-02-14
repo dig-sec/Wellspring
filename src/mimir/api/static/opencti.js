@@ -1,10 +1,10 @@
 import { toast, apiFetch } from './helpers.js';
 
 export function initOpenCTI() {
-  document.getElementById('scanFilesBtn').addEventListener('click', scanFiles);
-  document.getElementById('elasticPullBtn').addEventListener('click', pullElasticsearchDocs);
-  document.getElementById('feedlyPullBtn').addEventListener('click', pullFeedly);
-  document.getElementById('openctiPullBtn').addEventListener('click', pullOpenCTI);
+  document.getElementById('scanFilesBtn')?.addEventListener('click', scanFiles);
+  document.getElementById('elasticPullBtn')?.addEventListener('click', pullElasticsearchDocs);
+  document.getElementById('feedlyPullBtn')?.addEventListener('click', pullFeedly);
+  document.getElementById('openctiPullBtn')?.addEventListener('click', pullOpenCTI);
 
   // Load watched folder names into button label
   loadWatchedFolders();

@@ -184,7 +184,7 @@ export function initAsk() {
 
   /* ── render source context chips ───────── */
   function renderSources(el, event) {
-    if (!event.entities_found && !event.relations_found) {
+    if (!event.entities_found && !event.relations_found && !event.chunks_found) {
       el.innerHTML = '<div class="ask-source-empty">No matching entities found in the knowledge graph.</div>';
       el.style.display = '';
       return;
@@ -193,10 +193,12 @@ export function initAsk() {
     const entitiesFound = safeNumber(event.entities_found);
     const relationsFound = safeNumber(event.relations_found);
     const provenanceFound = safeNumber(event.provenance_found);
+    const chunksFound = safeNumber(event.chunks_found);
     let html = '<div class="ask-source-summary">';
     html += `<span class="ask-source-stat">🔍 ${entitiesFound} entities</span>`;
     html += `<span class="ask-source-stat">🔗 ${relationsFound} relations</span>`;
     html += `<span class="ask-source-stat">📄 ${provenanceFound} sources</span>`;
+    if (chunksFound) html += `<span class="ask-source-stat">📝 ${chunksFound} passages</span>`;
     html += '</div>';
 
     if (event.entities && event.entities.length) {

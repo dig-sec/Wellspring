@@ -22,6 +22,17 @@
   --c-mitigation: #22c55e;
   --c-report: #64748b;
   --c-identity: #0ea5e9;
+  --c-location: #6b7280;
+  --c-topic: #94a3b8;
+  --c-malware_sample: #dc2626;
+  --c-capa_rule: #16a34a;
+  --c-capa_behavior: #0d9488;
+  --c-yara_rule: #06b6d4;
+  --c-tactic: #7c3aed;
+  --c-sector: #b45309;
+  --c-service: #0284c7;
+  --c-credential: #9333ea;
+  --c-artifact: #4b5563;
   --c-unknown: #9ca3af;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -324,6 +335,17 @@ main { display: flex; flex: 1; overflow: hidden; }
 .entity-dot.t-mitigation { background: var(--c-mitigation); }
 .entity-dot.t-report { background: var(--c-report); }
 .entity-dot.t-identity { background: var(--c-identity); }
+.entity-dot.t-location { background: var(--c-location); }
+.entity-dot.t-topic { background: var(--c-topic); }
+.entity-dot.t-malware_sample { background: var(--c-malware_sample); }
+.entity-dot.t-capa_rule { background: var(--c-capa_rule); }
+.entity-dot.t-capa_behavior { background: var(--c-capa_behavior); }
+.entity-dot.t-yara_rule { background: var(--c-yara_rule); }
+.entity-dot.t-tactic { background: var(--c-tactic); }
+.entity-dot.t-sector { background: var(--c-sector); }
+.entity-dot.t-service { background: var(--c-service); }
+.entity-dot.t-credential { background: var(--c-credential); }
+.entity-dot.t-artifact { background: var(--c-artifact); }
 .entity-type { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
 .entity-info { flex: 1; min-width: 0; }
 .entity-name { font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -461,6 +483,10 @@ main { display: flex; flex: 1; overflow: hidden; }
 .pir-chip.t-tool { color: #1e40af; background: #dbeafe; }
 .pir-chip.t-infrastructure { color: #3730a3; background: #e0e7ff; }
 .pir-chip.t-identity { color: #0e7490; background: #cffafe; }
+.pir-chip.t-sector { color: #92400e; background: #fef3c7; }
+.pir-chip.t-service { color: #155e75; background: #ecfeff; }
+.pir-chip.t-credential { color: #6b21a8; background: #f3e8ff; }
+.pir-chip.t-artifact { color: #374151; background: #f3f4f6; }
 .pir-count-badge {
   font-size: 12px;
   color: var(--muted);
@@ -1661,6 +1687,7 @@ main { display: flex; flex: 1; overflow: hidden; }
 .status-badge.pending { background: #fef3c7; color: #92400e; }
 .status-badge.warn    { background: #fef3c7; color: #92400e; }
 .status-badge.err     { background: #fee2e2; color: #991b1b; }
+.status-badge.muted   { background: #f1f5f9; color: #64748b; }
 
 /* Error and empty states */
 .status-error {
@@ -1745,9 +1772,23 @@ main { display: flex; flex: 1; overflow: hidden; }
   text-align: right;
 }
 
-/* Worker detail line */
-.worker-detail {
-  color: var(--muted);
+/* Worker rows: wrap onto multiple lines gracefully */
+.status-row.worker-row {
+  flex-wrap: wrap;
+}
+.worker-reason {
   font-size: 10px;
+  color: var(--danger);
+  word-break: break-word;
+  flex-basis: 100%;
+  padding-left: 0;
+  margin-top: 2px;
+}
+.worker-detail {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--muted);
+  flex-basis: 100%;
+  margin-top: 2px;
   opacity: 0.8;
 }

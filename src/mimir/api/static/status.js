@@ -99,11 +99,11 @@ async function refreshStatus() {
     if (typeEntries.length > 0) {
       const maxCount = typeEntries[0][1] || 1;
       const typeColors = {
-        malware_sample: '#ef4444', malware: '#f97316', attack_pattern: '#eab308',
-        capa_rule: '#22c55e', yara_rule: '#06b6d4', indicator: '#8b5cf6',
-        identity: '#3b82f6', threat_actor: '#ec4899', campaign: '#6366f1',
+        malware_sample: '#ef4444', malware: '#f97316', attack_pattern: '#a855f7',
+        capa_rule: '#22c55e', capa_behavior: '#0d9488', yara_rule: '#06b6d4', indicator: '#8b5cf6',
+        identity: '#0ea5e9', threat_actor: '#ec4899', campaign: '#6366f1',
         report: '#64748b', topic: '#94a3b8', tool: '#14b8a6',
-        infrastructure: '#f59e0b', vulnerability: '#ef4444', mitigation: '#10b981',
+        infrastructure: '#f59e0b', vulnerability: '#eab308', mitigation: '#10b981', tactic: '#7c3aed',
         location: '#6b7280',
       };
       const barsHtml = typeEntries.map(([type, count]) => {
@@ -181,13 +181,13 @@ async function refreshStatus() {
         if (d.indices) detailParts.push(Array.isArray(d.indices) ? d.indices.join(', ') : d.indices);
         const detailStr = detailParts.length > 0 ? detailParts.join(' · ') : '';
         return `
-        <div class="status-row">
+        <div class="status-row worker-row">
           <span class="status-row-label">${w.label || w.id}</span>
           ${workerBadge(w)}
           <span class="status-row-detail">${w.age_seconds == null ? 'never seen' : ago(w.age_seconds)}</span>
           <span class="status-row-detail">${cadence(w.interval_seconds)}</span>
-          ${(w.disabled_reason && !w.enabled) ? `<span class="status-error-inline">${truncate(w.disabled_reason, 90)}</span>` : ''}
-          ${detailStr ? `<span class="status-row-detail worker-detail">${detailStr}</span>` : ''}
+          ${(w.disabled_reason && !w.enabled) ? `<span class="worker-reason">${truncate(w.disabled_reason, 90)}</span>` : ''}
+          ${detailStr ? `<span class="worker-detail">${detailStr}</span>` : ''}
         </div>`;}).join('')
       : '<div class="status-empty">No worker status available</div>';
 
@@ -198,24 +198,38 @@ async function refreshStatus() {
     // ── 4. Metrics Health card
     const ms = stats.metrics_status || {};
     const cs = stats.cti_metrics_status || {};
-    const metricsHealth = ms.error ? 'err' : ms.is_stale ? 'warn' : ms.last_rollup_at ? 'ok' : 'pending';
-    const ctiHealth     = cs.error ? 'err' : cs.is_stale ? 'warn' : cs.last_rollup_at ? 'ok' : 'pending';
-    const metricsLabel  = ms.error ? 'Error' : ms.is_stale ? 'Stale' : ms.last_rollup_at ? 'Fresh' : 'Pending';
-    const ctiLabel      = cs.error ? 'Error' : cs.is_stale ? 'Stale' : cs.last_rollup_at ? 'Fresh' : 'Pending';
+    const ps = stats.pir_metrics_status || {};
+
+    function rollupHealth(s) {
+      if (s.error) return { cls: 'err', label: 'Error' };
+      if (s.is_stale) return { cls: 'warn', label: 'Stale' };
+      if (s.last_rollup_at) return { cls: 'ok', label: 'Fresh' };
+      if (!s.has_data) return { cls: 'muted', label: 'No Data' };
+      return { cls: 'pending', label: 'Pending' };
+    }
+    const mh = rollupHealth(ms);
+    const ch = rollupHealth(cs);
+    const ph = rollupHealth(ps);
 
     grid.innerHTML += buildCard('Metrics Health', 'metrics', `
       <div class="status-rows">
         <div class="status-row">
           <span class="status-row-label">Threat Actor Rollup</span>
-          <span class="status-badge ${metricsHealth}">${metricsLabel}</span>
+          <span class="status-badge ${mh.cls}">${mh.label}</span>
           <span class="status-row-detail">${ago(ms.rollup_age_seconds)}</span>
         </div>
         <div class="status-row">
+          <span class="status-row-label">PIR Rollup</span>
+          <span class="status-badge ${ph.cls}">${ph.label}</span>
+          <span class="status-row-detail">${ago(ps.rollup_age_seconds)}</span>
+        </div>
+        <div class="status-row">
           <span class="status-row-label">CTI Assessment</span>
-          <span class="status-badge ${ctiHealth}">${ctiLabel}</span>
+          <span class="status-badge ${ch.cls}">${ch.label}</span>
           <span class="status-row-detail">${ago(cs.rollup_age_seconds)}</span>
         </div>
         ${ms.error ? `<div class="status-error">${ms.error}</div>` : ''}
+        ${ps.error ? `<div class="status-error">${ps.error}</div>` : ''}
         ${cs.error ? `<div class="status-error">${cs.error}</div>` : ''}
       </div>
     `);

@@ -186,6 +186,17 @@ class Settings:
         os.getenv("MALWARE_WORKER_MAX_PER_INDEX", "500")
     )
 
+    # AIKG JSON import (subject-predicate-object arrays)
+    aikg_import_include_inferred: bool = _env_bool(
+        "AIKG_IMPORT_INCLUDE_INFERRED", "0"
+    )
+    aikg_import_min_inferred_confidence: float = float(
+        os.getenv("AIKG_IMPORT_MIN_INFERRED_CONFIDENCE", "0.60")
+    )
+    aikg_import_allow_via_predicates: bool = _env_bool(
+        "AIKG_IMPORT_ALLOW_VIA_PREDICATES", "0"
+    )
+
     # Data ingestion limits
     max_document_size_mb: int = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "100"))
     max_total_chars_per_run: int = int(
@@ -355,6 +366,11 @@ def validate_settings(settings: Settings) -> None:
         raise ValueError(
             "SEARCH_QUERY_MAX_LENGTH must be >= 8, "
             f"got {settings.search_query_max_length}"
+        )
+    if not (0.0 <= settings.aikg_import_min_inferred_confidence <= 1.0):
+        raise ValueError(
+            "AIKG_IMPORT_MIN_INFERRED_CONFIDENCE must be between 0.0 and 1.0, "
+            f"got {settings.aikg_import_min_inferred_confidence}"
         )
 
     # Log resolved settings for debugging

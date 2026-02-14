@@ -361,8 +361,9 @@ class SQLiteGraphStore(GraphStore):
             ).fetchall()
             if row:
                 return [_row_to_entity(r) for r in row]
-        params: List[Any] = [f"%{query.lower()}%"]
-        sql = "SELECT * FROM entities WHERE lower(name) LIKE ?"
+        pattern = f"%{query.lower()}%"
+        params: List[Any] = [pattern, pattern]
+        sql = "SELECT * FROM entities WHERE (lower(name) LIKE ? OR lower(aliases) LIKE ?)"
         if entity_type:
             sql += " AND type = ?"
             params.append(entity_type)

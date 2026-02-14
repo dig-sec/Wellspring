@@ -97,8 +97,19 @@ def render_root_ui(root_path: str = "", api_base_url: str = "", ollama_model: st
                 <option value="indicator">Indicator</option>
                 <option value="infrastructure">Infrastructure</option>
                 <option value="identity">Identity</option>
+                <option value="location">Location</option>
                 <option value="mitigation">Mitigation</option>
                 <option value="report">Report</option>
+                <option value="topic">Topic</option>
+                <option value="malware_sample">Malware Sample</option>
+                <option value="capa_rule">CAPA Rule</option>
+                <option value="capa_behavior">CAPA Behavior</option>
+                <option value="yara_rule">YARA Rule</option>
+                <option value="tactic">Tactic</option>
+                <option value="sector">Sector</option>
+                <option value="service">Service</option>
+                <option value="credential">Credential</option>
+                <option value="artifact">Artifact</option>
               </select>
             </div>
             <div class="ctrl-group">
@@ -179,25 +190,7 @@ def render_root_ui(root_path: str = "", api_base_url: str = "", ollama_model: st
           </div>
         </div>
 
-        <!-- source pulls -->
-        <div class="sidebar-section" style="padding-top:0">
-          <div class="btn-row" style="margin-top:8px">
-            <button class="btn btn-outline" id="feedlyPullBtn" style="flex:1;font-size:12px">
-              &#x1F4E1; Feedly CTI
-            </button>
-            <button class="btn btn-outline" id="openctiPullBtn" style="flex:1;font-size:12px">
-              &#x1F310; OpenCTI
-            </button>
-          </div>
-          <div class="btn-row" style="margin-top:4px">
-            <button class="btn btn-outline" id="scanFilesBtn" style="flex:1;font-size:12px">
-              &#x1F4C1; Scan Folders
-            </button>
-            <button class="btn btn-outline" id="elasticPullBtn" style="flex:1;font-size:12px">
-              &#x1F50D; ES Docs
-            </button>
-          </div>
-        </div>
+
 
         <!-- entity list -->
         <div class="scroll-list" id="entityList">

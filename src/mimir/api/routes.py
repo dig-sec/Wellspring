@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from ..config import get_settings
 from ..connectors import sync_feedly_index
+from ..connectors.aikg import ingest_aikg_triples, parse_aikg_file
 from ..elastic_source import ElasticsearchSourceClient, pull_from_elasticsearch
 from ..export import export_csv_zip, export_graphml, export_json, export_markdown
 from ..graph_limits import limit_subgraph
@@ -32,6 +33,7 @@ from ..schemas import (
 from ..stix.exporter import export_stix_bundle
 from ..stix.importer import ingest_stix_bundle, parse_stix_file
 from ..storage.factory import create_graph_store, create_metrics_store, create_run_store
+from .ask_retrieval import gather_full_context
 from .tasks import TaskStatus, task_manager
 from .ui import render_root_ui
 from .visualize import render_html
@@ -401,7 +403,7 @@ def _is_stix_bundle(raw: bytes) -> bool:
 
 @router.post("/api/upload")
 async def upload_documents(files: List[UploadFile] = File(...)):
-    """Upload documents (text, PDF, or STIX 2.1 JSON) for ingestion."""
+    """Upload documents (text, PDF, STIX JSON, or AIKG triples JSON)."""
     results = []
     max_upload_bytes = settings.max_document_size_mb * 1024 * 1024
     for f in files:
@@ -447,6 +449,38 @@ async def upload_documents(files: List[UploadFile] = File(...)):
                     }
                 )
             continue
+
+        # ── AIKG triples fast-path: structured import, no LLM needed ──
+        if filename.lower().endswith(".json"):
+            try:
+                triples = parse_aikg_file(raw, filename)
+                aikg_result = ingest_aikg_triples(
+                    triples,
+                    graph_store,
+                    source_uri=f"upload://{filename}",
+                    include_inferred=settings.aikg_import_include_inferred,
+                    min_inferred_confidence=settings.aikg_import_min_inferred_confidence,
+                    allow_via_predicates=settings.aikg_import_allow_via_predicates,
+                )
+                results.append(
+                    {
+                        "filename": filename,
+                        "status": "completed",
+                        "type": "aikg",
+                        "triples_seen": aikg_result.triples_seen,
+                        "triples_imported": aikg_result.triples_imported,
+                        "entities": aikg_result.entities_created,
+                        "relations": aikg_result.relations_created,
+                        "skipped_invalid": aikg_result.skipped_invalid,
+                        "skipped_inferred": aikg_result.skipped_inferred,
+                        "skipped_low_confidence": aikg_result.skipped_low_confidence,
+                        "errors": aikg_result.errors[:20],
+                    }
+                )
+                continue
+            except ValueError:
+                # Not AIKG JSON; fall through to regular text ingestion.
+                pass
 
         # ── Regular document: enqueue for LLM extraction ──
         text = _extract_text(raw, filename)
@@ -1586,6 +1620,7 @@ async def pull_all_sources(
 
             queued = 0
             stix_ok = 0
+            aikg_ok = 0
             scan_errors: List[str] = []
 
             for i, filepath in enumerate(files):
@@ -1610,6 +1645,21 @@ async def pull_all_sources(
                         except Exception as exc:
                             scan_errors.append(f"{fname}: STIX: {exc}")
                         continue
+                    if filepath.lower().endswith(".json"):
+                        try:
+                            triples = parse_aikg_file(raw, fname)
+                            ingest_aikg_triples(
+                                triples,
+                                graph_store,
+                                source_uri=f"file://{filepath}",
+                                include_inferred=settings.aikg_import_include_inferred,
+                                min_inferred_confidence=settings.aikg_import_min_inferred_confidence,
+                                allow_via_predicates=settings.aikg_import_allow_via_predicates,
+                            )
+                            aikg_ok += 1
+                            continue
+                        except ValueError:
+                            pass
                     text = _extract_text(raw, fname)
                     if len(text.strip()) < 50:
                         continue
@@ -1642,7 +1692,9 @@ async def pull_all_sources(
                     )
 
             summary = (
-                f"Scan: {queued} queued, {stix_ok} STIX, {len(scan_errors)} errors"
+                "Scan: "
+                f"{queued} queued, {stix_ok} STIX, {aikg_ok} AIKG, "
+                f"{len(scan_errors)} errors"
             )
             task_manager.update(
                 sid,
@@ -1787,6 +1839,7 @@ async def scan_directory(
 
         processed = 0
         stix_ok = 0
+        aikg_ok = 0
         queued = 0
         errors = []
 
@@ -1817,6 +1870,21 @@ async def scan_directory(
                     except Exception as exc:
                         errors.append(f"{fname}: STIX error: {exc}")
                     continue
+                if filepath.lower().endswith(".json"):
+                    try:
+                        triples = parse_aikg_file(raw, fname)
+                        ingest_aikg_triples(
+                            triples,
+                            graph_store,
+                            source_uri=f"file://{filepath}",
+                            include_inferred=settings.aikg_import_include_inferred,
+                            min_inferred_confidence=settings.aikg_import_min_inferred_confidence,
+                            allow_via_predicates=settings.aikg_import_allow_via_predicates,
+                        )
+                        aikg_ok += 1
+                        continue
+                    except ValueError:
+                        pass
 
                 # Regular document -> LLM extraction queue
                 text = _extract_text(raw, fname)
@@ -1851,17 +1919,25 @@ async def scan_directory(
             if processed % 25 == 0 or processed == len(files):
                 task_manager.update(
                     task_id,
-                    progress=f"Scanned {processed}/{len(files)}: {queued} queued, {stix_ok} STIX, {len(errors)} errors",
+                    progress=(
+                        f"Scanned {processed}/{len(files)}: {queued} queued, "
+                        f"{stix_ok} STIX, {aikg_ok} AIKG, {len(errors)} errors"
+                    ),
                 )
 
         task_manager.update(
             task_id,
             status=TaskStatus.COMPLETED,
-            progress=f"Done: {queued} queued for LLM, {stix_ok} STIX imported, {len(errors)} errors",
+            progress=(
+                f"Done: {queued} queued for LLM, "
+                f"{stix_ok} STIX imported, {aikg_ok} AIKG imported, "
+                f"{len(errors)} errors"
+            ),
             detail={
                 "total_scanned": processed,
                 "queued_for_llm": queued,
                 "stix_imported": stix_ok,
+                "aikg_imported": aikg_ok,
                 "errors": errors[:50],
             },
             finished_at=datetime.utcnow().isoformat(),
@@ -2023,9 +2099,10 @@ async def trigger_metrics_rollup(
 @router.get("/api/stats")
 def get_stats(source_uri: Optional[str] = Query(default=None)):
     """Quick graph stats with throughput."""
-    one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
     metrics_error = None
     cti_metrics_error = None
+    pir_metrics_error = None
     try:
         metrics = metrics_store.get_rollup_overview(days=30, source_uri=source_uri)
     except Exception as exc:
@@ -2036,6 +2113,19 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
     except Exception as exc:
         cti_metrics = None
         cti_metrics_error = str(exc)
+
+    # PIR rollup status — lightweight check via the same metrics index
+    pir_last_rollup_at = None
+    pir_last_rollup_dt = None
+    pir_rollup_age_seconds = None
+    try:
+        pir_overview_fn = getattr(metrics_store, "get_pir_trending_summary", None)
+        if callable(pir_overview_fn):
+            pir_data = pir_overview_fn(days=30, source_uri=source_uri)
+            if isinstance(pir_data, dict):
+                pir_last_rollup_at = pir_data.get("generated_at")
+    except Exception as exc:
+        pir_metrics_error = str(exc)
 
     stale_threshold_seconds = (
         settings.metrics_rollup_stale_seconds
@@ -2052,6 +2142,7 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
     )
     last_rollup_dt = _parse_iso_datetime(last_rollup_at)
     cti_last_rollup_dt = _parse_iso_datetime(cti_last_rollup_at)
+    pir_last_rollup_dt = _parse_iso_datetime(pir_last_rollup_at)
     rollup_age_seconds = None
     cti_rollup_age_seconds = None
     if last_rollup_dt:
@@ -2068,20 +2159,64 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
             ),
             0,
         )
+    if pir_last_rollup_dt:
+        pir_rollup_age_seconds = max(
+            int(
+                (
+                    datetime.now(timezone.utc) - _to_utc(pir_last_rollup_dt)
+                ).total_seconds()
+            ),
+            0,
+        )
+
+    # Determine staleness — distinguish "no data" from truly stale
+    metrics_has_data = isinstance(metrics, dict) and (
+        (metrics.get("active_actors") or 0) > 0
+        or last_rollup_at is not None
+    )
+    cti_has_data = isinstance(cti_metrics, dict) and (
+        (cti_metrics.get("docs_total") or cti_metrics.get("assessments_total") or 0) > 0
+        or cti_last_rollup_at is not None
+    )
+    pir_has_data = pir_last_rollup_at is not None
+
     is_stale = (
-        metrics is None
-        or not last_rollup_dt
+        metrics_error is not None
         or (
-            rollup_age_seconds is not None
-            and rollup_age_seconds > stale_threshold_seconds
+            metrics_has_data
+            and (
+                not last_rollup_dt
+                or (
+                    rollup_age_seconds is not None
+                    and rollup_age_seconds > stale_threshold_seconds
+                )
+            )
         )
     )
     cti_is_stale = (
-        cti_metrics is None
-        or not cti_last_rollup_dt
+        cti_metrics_error is not None
         or (
-            cti_rollup_age_seconds is not None
-            and cti_rollup_age_seconds > stale_threshold_seconds
+            cti_has_data
+            and (
+                not cti_last_rollup_dt
+                or (
+                    cti_rollup_age_seconds is not None
+                    and cti_rollup_age_seconds > stale_threshold_seconds
+                )
+            )
+        )
+    )
+    pir_is_stale = (
+        pir_metrics_error is not None
+        or (
+            pir_has_data
+            and (
+                not pir_last_rollup_dt
+                or (
+                    pir_rollup_age_seconds is not None
+                    and pir_rollup_age_seconds > stale_threshold_seconds
+                )
+            )
         )
     )
 
@@ -2119,6 +2254,7 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
             "rollup_age_seconds": rollup_age_seconds,
             "stale_threshold_seconds": stale_threshold_seconds,
             "is_stale": is_stale,
+            "has_data": metrics_has_data,
             "error": metrics_error,
         },
         "cti_metrics_status": {
@@ -2127,7 +2263,17 @@ def get_stats(source_uri: Optional[str] = Query(default=None)):
             "rollup_age_seconds": cti_rollup_age_seconds,
             "stale_threshold_seconds": stale_threshold_seconds,
             "is_stale": cti_is_stale,
+            "has_data": cti_has_data,
             "error": cti_metrics_error,
+        },
+        "pir_metrics_status": {
+            "source_uri": source_uri,
+            "last_rollup_at": pir_last_rollup_at,
+            "rollup_age_seconds": pir_rollup_age_seconds,
+            "stale_threshold_seconds": stale_threshold_seconds,
+            "is_stale": pir_is_stale,
+            "has_data": pir_has_data,
+            "error": pir_metrics_error,
         },
         "workers": _build_worker_statuses(),
     }
@@ -2443,7 +2589,6 @@ async def ask_question(request: Request):
     Uses Ollama (phi4) to synthesize an answer from graph context.
     Streams the response token-by-token via SSE.
     """
-    import asyncio
     import json as _json
 
     import httpx
@@ -2458,66 +2603,9 @@ async def ask_question(request: Request):
         raise HTTPException(status_code=413, detail="question exceeds 4000 characters")
 
     # ── 1. Gather context from the knowledge graph ──────────────
-    context: Dict = {"entities": [], "relations": [], "provenance": [], "stats": None}
-
-    # Search for relevant entities
-    search_terms = question  # use the whole question as search
-    try:
-        found_entities = graph_store.search_entities(search_terms)[:20]
-    except Exception:
-        found_entities = []
-
-    entity_map: Dict[str, str] = {}  # id -> name
-    for e in found_entities:
-        entity_map[e.id] = e.name
-        context["entities"].append({
-            "name": e.name,
-            "type": getattr(e, "type", "unknown"),
-            "aliases": getattr(e, "aliases", []),
-        })
-
-    # Get subgraphs and provenance for top entities (limit to top 5)
-    seen_relations = set()
-    for e in found_entities[:5]:
-        try:
-            sub = graph_store.get_subgraph(e.id, depth=1, min_confidence=0.0)
-            for node in sub.nodes:
-                if node.id not in entity_map:
-                    entity_map[node.id] = node.name
-
-            for edge in sub.edges[:15]:
-                if edge.id in seen_relations:
-                    continue
-                seen_relations.add(edge.id)
-                context["relations"].append({
-                    "subject_name": entity_map.get(edge.subject_id, edge.subject_id),
-                    "predicate": edge.predicate,
-                    "object_name": entity_map.get(edge.object_id, edge.object_id),
-                    "confidence": edge.confidence,
-                })
-
-                # Get provenance for this relation
-                try:
-                    _rel, prov_list, _runs = graph_store.explain_edge(edge.id)
-                    for p in prov_list[:2]:
-                        context["provenance"].append({
-                            "source_uri": getattr(p, "source_uri", None),
-                            "snippet": getattr(p, "snippet", None),
-                        })
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    # Graph stats
-    try:
-        context["stats"] = {
-            "entities": graph_store.count_entities(),
-            "relations": graph_store.count_relations(),
-            "runs_completed": run_store.count_runs(status="completed"),
-        }
-    except Exception:
-        pass
+    context, search_terms = gather_full_context(
+        question, graph_store, run_store=run_store,
+    )
 
     # ── 2. Render prompt with gathered context ──────────────────
     prompt = render_prompt(
@@ -2526,6 +2614,7 @@ async def ask_question(request: Request):
         entities=context["entities"],
         relations=context["relations"],
         provenance=context["provenance"],
+        chunks=context.get("chunks", []),
         stats=context["stats"],
     )
 
@@ -2537,7 +2626,9 @@ async def ask_question(request: Request):
             "entities_found": len(context["entities"]),
             "relations_found": len(context["relations"]),
             "provenance_found": len(context["provenance"]),
+            "chunks_found": len(context.get("chunks", [])),
             "entities": context["entities"][:10],
+            "search_terms": search_terms[:10],
         }
         yield f"data: {_json.dumps(sources_event)}\n\n"
 
